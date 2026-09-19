@@ -168,24 +168,35 @@ struct NotificationPlannerTests {
 
 @Suite("Guided sign-in")
 struct GuidedLoginTests {
+    static let profile = URL(fileURLWithPath: "/Users/me/Library/Application Support/VibecomBar/profiles/ABC")
+
+    @Test("names the CLI it runs, whatever spaces the profile path contains")
+    func namesExecutable() {
+        #expect(GuidedLogin.codex(codexHome: Self.profile).executable == "codex")
+        #expect(GuidedLogin.claude(configDir: Self.profile).executable == "claude")
+    }
+
     @Test("signs a new Codex account in without disturbing the current one")
     func codexCommand() {
-        let command = GuidedLogin.codexCommand(codexHome: URL(fileURLWithPath: "/tmp/profile one"))
+        let line = GuidedLogin.codex(codexHome: URL(fileURLWithPath: "/tmp/profile one"))
+            .shellLine(executablePath: "/Users/me/.local/bin/codex")
 
-        #expect(command == "CODEX_HOME='/tmp/profile one' codex login")
+        #expect(line == "CODEX_HOME='/tmp/profile one' '/Users/me/.local/bin/codex' login")
     }
 
     @Test("signs a new Claude account in under its own config directory")
     func claudeCommand() {
-        let command = GuidedLogin.claudeCommand(configDir: URL(fileURLWithPath: "/tmp/profile one"))
+        let line = GuidedLogin.claude(configDir: URL(fileURLWithPath: "/tmp/profile one"))
+            .shellLine(executablePath: "/Users/me/.local/bin/claude")
 
-        #expect(command == "CLAUDE_CONFIG_DIR='/tmp/profile one' claude /login")
+        #expect(line == "CLAUDE_CONFIG_DIR='/tmp/profile one' '/Users/me/.local/bin/claude' /login")
     }
 
     @Test("escapes a path that could otherwise break out of the quoting")
     func escapesQuotes() {
-        let command = GuidedLogin.codexCommand(codexHome: URL(fileURLWithPath: "/tmp/it's here"))
+        let line = GuidedLogin.codex(codexHome: URL(fileURLWithPath: "/tmp/it's here"))
+            .shellLine(executablePath: "codex")
 
-        #expect(command == "CODEX_HOME='/tmp/it'\\''s here' codex login")
+        #expect(line == "CODEX_HOME='/tmp/it'\\''s here' 'codex' login")
     }
 }

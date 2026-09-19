@@ -150,15 +150,39 @@ public struct NotificationPlanner: Sendable {
 
 // MARK: - Guided sign-in
 
-/// Builds the commands a guided sign-in runs, so a new account can be added
-/// without signing the current one out.
-public enum GuidedLogin {
-    public static func codexCommand(codexHome: URL) -> String {
-        "CODEX_HOME=\(shellQuoted(codexHome.path)) codex login"
+/// A sign-in to run in Terminal. The executable is named rather than parsed
+/// back out of the command text, since profile paths contain spaces.
+public struct LoginCommand: Equatable, Sendable {
+    public let executable: String
+    public let arguments: [String]
+    public let environment: [(String, String)]
+
+    public static func == (lhs: LoginCommand, rhs: LoginCommand) -> Bool {
+        lhs.executable == rhs.executable && lhs.arguments == rhs.arguments
+            && lhs.environment.map(\.0) == rhs.environment.map(\.0)
+            && lhs.environment.map(\.1) == rhs.environment.map(\.1)
     }
 
-    public static func claudeCommand(configDir: URL) -> String {
-        "CLAUDE_CONFIG_DIR=\(shellQuoted(configDir.path)) claude /login"
+    /// The line to run, with the CLI given by its full path so the sign-in
+    /// does not depend on what PATH the Terminal shell ends up with.
+    public func shellLine(executablePath: String) -> String {
+        let assignments = environment.map { "\($0.0)=\(GuidedLogin.shellQuoted($0.1))" }
+        return (assignments + [GuidedLogin.shellQuoted(executablePath)] + arguments)
+            .joined(separator: " ")
+    }
+}
+
+/// Builds the sign-ins a guided add runs, so a new account can be added
+/// without signing the current one out.
+public enum GuidedLogin {
+    public static func codex(codexHome: URL) -> LoginCommand {
+        LoginCommand(executable: "codex", arguments: ["login"], environment: [("CODEX_HOME", codexHome.path)])
+    }
+
+    public static func claude(configDir: URL) -> LoginCommand {
+        LoginCommand(
+            executable: "claude", arguments: ["/login"],
+            environment: [("CLAUDE_CONFIG_DIR", configDir.path)])
     }
 
     static func shellQuoted(_ value: String) -> String {

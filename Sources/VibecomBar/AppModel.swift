@@ -180,9 +180,9 @@ final class AppModel {
             do {
                 let before = try KeychainSecretStore().services(withPrefix: "Claude Code-credentials")
                 try TerminalRunner.run(
-                    command: provider == .claude
-                        ? GuidedLogin.claudeCommand(configDir: profile)
-                        : GuidedLogin.codexCommand(codexHome: profile),
+                    provider == .claude
+                        ? GuidedLogin.claude(configDir: profile)
+                        : GuidedLogin.codex(codexHome: profile),
                     title: "Sign in to \(provider.displayName) for vibecom bar",
                     in: profile)
 

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import VibecomBarCore
 
 /// Runs a sign-in in Terminal by opening a `.command` script, which needs no
 /// automation permission and gives the CLI a real login shell.
@@ -9,9 +10,9 @@ enum TerminalRunner {
         case cannotWriteScript
     }
 
-    static func run(command: String, title: String, in profile: URL) throws {
-        let cli = String(command.split(separator: " ").first { !$0.contains("=") } ?? "")
-        guard which(cli) != nil else { throw RunError.cliMissing(cli) }
+    static func run(_ login: LoginCommand, title: String, in profile: URL) throws {
+        guard let executable = which(login.executable) else { throw RunError.cliMissing(login.executable) }
+        let command = login.shellLine(executablePath: executable.path)
 
         try FileManager.default.createDirectory(
             at: profile, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
