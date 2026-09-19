@@ -59,6 +59,14 @@ public struct KeychainSecretStore: SecretStore {
         }
     }
 
+    /// The legacy keychain would otherwise put up a password dialog for an
+    /// item another build owns; with interaction off the call just fails.
+    public func deleteIfSilent(service: String) {
+        SecKeychainSetUserInteractionAllowed(false)
+        defer { SecKeychainSetUserInteractionAllowed(true) }
+        try? delete(service: service)
+    }
+
     public func services(withPrefix prefix: String) throws -> [String] {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

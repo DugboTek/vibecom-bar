@@ -7,6 +7,13 @@ public protocol SecretStore: Sendable {
     func write(_ data: Data, service: String) throws
     func delete(service: String) throws
     func services(withPrefix prefix: String) throws -> [String]
+    /// Deletes only if it can be done without asking the user; otherwise leaves
+    /// the item alone. For tidying up, never for anything that must happen.
+    func deleteIfSilent(service: String)
+}
+
+extension SecretStore {
+    public func deleteIfSilent(service: String) { try? delete(service: service) }
 }
 
 public protocol FileStore: Sendable {
@@ -66,9 +73,14 @@ public enum VaultError: Error, Equatable {
 
 /// Account metadata lives in a plain file; tokens only ever live in the keychain.
 public actor AccountVault {
-    static let secretServicePrefix = "build.vibecom.bar.account."
+    /// Items under this name are created by the signed app, so the keychain
+    /// already trusts it and never asks.
+    public static let secretServicePrefix = "build.vibecom.bar.v2.account."
+    /// Saved by builds signed differently; each is read once and moved.
+    static let legacyServicePrefixes = ["build.vibecom.bar.account."]
 
     private let secrets: SecretStore
+    private let servicePrefix: String
     private let files: FileStore
     private let directory: URL
     private var cache: [StoredAccount]?
@@ -76,10 +88,14 @@ public actor AccountVault {
     /// each saved login is read once per launch and kept in memory after that.
     private var secretCache: [UUID: AccountSecret] = [:]
 
-    public init(secrets: SecretStore, files: FileStore, directory: URL) {
+    public init(
+        secrets: SecretStore, files: FileStore, directory: URL,
+        servicePrefix: String = AccountVault.secretServicePrefix
+    ) {
         self.secrets = secrets
         self.files = files
         self.directory = directory
+        self.servicePrefix = servicePrefix
     }
 
     private var metadataURL: URL { directory.appendingPathComponent("accounts.json") }
@@ -129,12 +145,24 @@ public actor AccountVault {
 
     public func secret(for id: UUID) throws -> AccountSecret {
         if let cached = secretCache[id] { return cached }
-        guard let data = try secrets.read(service: Self.secretServicePrefix + id.uuidString) else {
-            throw VaultError.missingSecret(id)
+        if let data = try secrets.read(service: servicePrefix + id.uuidString) {
+            let secret = try JSONDecoder().decode(AccountSecret.self, from: data)
+            secretCache[id] = secret
+            return secret
         }
-        let secret = try JSONDecoder().decode(AccountSecret.self, from: data)
-        secretCache[id] = secret
-        return secret
+
+        // An item from a differently signed build asks for permission on every
+        // read. Read it this one time, re-save it as this build's own item, and
+        // remove the old one.
+        for legacy in Self.legacyServicePrefixes {
+            guard let data = try? secrets.read(service: legacy + id.uuidString),
+                let secret = try? JSONDecoder().decode(AccountSecret.self, from: data)
+            else { continue }
+            try writeSecret(secret, for: id)
+            secrets.deleteIfSilent(service: legacy + id.uuidString)
+            return secret
+        }
+        throw VaultError.missingSecret(id)
     }
 
     public func update(secret: AccountSecret, for id: UUID) throws {
@@ -182,14 +210,17 @@ public actor AccountVault {
 
     public func remove(_ id: UUID) throws {
         let all = try accounts().filter { $0.id != id }
-        try secrets.delete(service: Self.secretServicePrefix + id.uuidString)
+        try secrets.delete(service: servicePrefix + id.uuidString)
+        for legacy in Self.legacyServicePrefixes {
+            try? secrets.delete(service: legacy + id.uuidString)
+        }
         secretCache[id] = nil
         try persist(all)
     }
 
     private func writeSecret(_ secret: AccountSecret, for id: UUID) throws {
         let data = try JSONEncoder().encode(secret)
-        try secrets.write(data, service: Self.secretServicePrefix + id.uuidString)
+        try secrets.write(data, service: servicePrefix + id.uuidString)
         secretCache[id] = secret
     }
 
@@ -274,23 +305,37 @@ public struct AccountActivator: Sendable {
         }
     }
 
-    /// Which stored account the CLI would use right now — matched on the live
-    /// token, so switching outside this app is still reflected.
+    /// Which stored account the CLI would use right now. Claude is read from
+    /// `~/.claude.json`, a plain file, because reading Claude Code's keychain
+    /// item on every refresh is what put password prompts in front of the user.
+    /// Codex keeps its login in a file, so its token is compared directly.
     public func activeAccountID(for provider: Provider) async throws -> UUID? {
-        guard let liveToken = try liveAccessToken(for: provider) else { return nil }
+        let accounts = try await vault.accounts(for: provider)
 
-        for account in try await vault.accounts(for: provider) {
-            let secret = try? await vault.secret(for: account.id)
-            switch secret {
-            case .claude(let credentials) where credentials.accessToken == liveToken:
-                return account.id
-            case .codex(let credentials) where credentials.accessToken == liveToken:
-                return account.id
-            default:
-                continue
+        switch provider {
+        case .claude:
+            guard let data = try environment.files.read(environment.claudeConfigFile),
+                let live = ClaudeProfileFile.identity(fromJSON: data)
+            else { return nil }
+            if let uuid = live.accountUUID,
+                let match = accounts.first(where: { $0.identity.accountUUID == uuid })
+            {
+                return match.id
             }
+            guard let email = live.email else { return nil }
+            return accounts.first { $0.identity.email?.lowercased() == email.lowercased() }?.id
+
+        case .codex:
+            guard let liveToken = try liveAccessToken(for: .codex) else { return nil }
+            for account in accounts {
+                if case .codex(let credentials) = try? await vault.secret(for: account.id),
+                    credentials.accessToken == liveToken
+                {
+                    return account.id
+                }
+            }
+            return nil
         }
-        return nil
     }
 
     private func liveAccessToken(for provider: Provider) throws -> String? {

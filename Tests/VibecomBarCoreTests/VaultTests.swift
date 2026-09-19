@@ -128,7 +128,30 @@ struct AccountVaultTests {
 
         for _ in 0..<5 { _ = try await vault.secret(for: account.id) }
 
-        #expect(secrets.reads(withPrefix: "build.vibecom.bar.account.") == 1)
+        #expect(secrets.reads(withPrefix: AccountVault.secretServicePrefix) == 1)
+    }
+
+    @Test("moves a login saved by an older build into an item this build owns, once")
+    func migratesLegacyItem() async throws {
+        let id = UUID()
+        let legacy = "build.vibecom.bar.account.\(id.uuidString)"
+        let secret = AccountSecret.claude(ClaudeCredentials(accessToken: "at-old-build"))
+        let secrets = MemorySecretStore([legacy: try JSONEncoder().encode(secret)])
+        let files = MemoryFileStore()
+        let account = StoredAccount(id: id, provider: .claude, label: "old", identity: AccountIdentity(email: "o@example.com"))
+        try files.write(
+            {
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                return try encoder.encode([account])
+            }(), to: URL(fileURLWithPath: "/vault/accounts.json"))
+
+        #expect(try await makeVault(secrets: secrets, files: files).secret(for: id) == secret)
+        #expect(try await makeVault(secrets: secrets, files: files).secret(for: id) == secret)
+
+        #expect(secrets.reads(of: legacy) == 1)
+        #expect(secrets.contents(of: legacy) == nil)
+        #expect(secrets.contents(of: AccountVault.secretServicePrefix + id.uuidString) != nil)
     }
 
     @Test("removing an account takes its tokens out of the keychain too")
@@ -142,7 +165,7 @@ struct AccountVaultTests {
         try await vault.remove(account.id)
 
         #expect(try await vault.accounts().isEmpty)
-        #expect(secrets.contents(of: "build.vibecom.bar.account.\(account.id.uuidString)") == nil)
+        #expect(secrets.contents(of: AccountVault.secretServicePrefix + account.id.uuidString) == nil)
     }
 }
 
@@ -262,6 +285,22 @@ struct ActivationTests {
         let activator = AccountActivator(vault: vault, environment: environment(secrets: secrets, files: files))
 
         #expect(try await activator.activeAccountID(for: .claude) == live.id)
+    }
+
+    @Test("tells which Claude account is signed in without reading the keychain")
+    func detectsActiveClaudeFromProfileFile() async throws {
+        let secrets = MemorySecretStore([ClaudeKeychain.service: Self.liveKeychain])
+        let files = MemoryFileStore(["/home/.claude.json": Self.liveProfile])
+        let vault = makeVault(secrets: secrets, files: files)
+        let live = try await vault.add(
+            provider: .claude, identity: AccountIdentity(email: "live@example.com", accountUUID: "uuid-live"),
+            secret: .claude(ClaudeCredentials(accessToken: "at-anything")))
+        let activator = AccountActivator(vault: vault, environment: environment(secrets: secrets, files: files))
+
+        let active = try await activator.activeAccountID(for: .claude)
+
+        #expect(active == live.id)
+        #expect(secrets.reads(of: ClaudeKeychain.service) == 0)
     }
 
     @Test("reports no active account when the signed-in login was never captured")

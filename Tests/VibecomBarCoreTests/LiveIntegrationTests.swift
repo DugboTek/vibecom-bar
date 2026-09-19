@@ -3,6 +3,12 @@ import Testing
 
 @testable import VibecomBarCore
 
+/// Live runs save under their own name so they never collide with, or leave
+/// items among, the app's real saved logins.
+enum LiveKeychainNames {
+    static let prefix = "build.vibecom.bar.test.\(UUID().uuidString)."
+}
+
 /// Exercises the whole path against the real CLIs and the real providers:
 /// capture the signed-in login, renew its token, read usage back.
 ///
@@ -33,7 +39,8 @@ struct LiveIntegrationTests {
             .appendingPathComponent("vibecom-bar-live-\(UUID().uuidString)")
         let environment = CLIEnvironment.live()
         let vault = AccountVault(
-            secrets: KeychainSecretStore(), files: DiskFileStore(), directory: directory)
+            secrets: KeychainSecretStore(), files: DiskFileStore(), directory: directory,
+            servicePrefix: LiveKeychainNames.prefix)
         let activator = AccountActivator(vault: vault, environment: environment)
         let monitor = AccountMonitor(vault: vault, activator: activator, environment: environment)
         return (vault, activator, monitor, AccountImporter(environment: environment))
@@ -158,7 +165,8 @@ struct LiveRenewalTests {
         let vault = AccountVault(
             secrets: KeychainSecretStore(), files: DiskFileStore(),
             directory: URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("vibecom-bar-renew-\(UUID().uuidString)"))
+                .appendingPathComponent("vibecom-bar-renew-\(UUID().uuidString)"),
+            servicePrefix: LiveKeychainNames.prefix)
         let activator = AccountActivator(vault: vault, environment: environment)
         let monitor = AccountMonitor(vault: vault, activator: activator, environment: environment)
         let importer = AccountImporter(environment: environment)
@@ -237,6 +245,21 @@ struct LiveParityTests {
                 total += messages.values.reduce(0) { $0 + $1.usage.total }
             }
             print("swift \(tool.rawValue): \(total)")
+        }
+    }
+}
+
+/// Removes keychain items that earlier live runs saved under the app's real
+/// name. Only the named items, and only on request.
+@Suite("Live cleanup", .enabled(if: ProcessInfo.processInfo.environment["VIBECOM_DELETE_ITEMS"] != nil))
+struct LiveCleanup {
+    @Test("deletes the listed stray items")
+    func deleteStrayItems() throws {
+        let names = ProcessInfo.processInfo.environment["VIBECOM_DELETE_ITEMS"]!.split(separator: ",")
+        let store = KeychainSecretStore()
+        for name in names {
+            try store.delete(service: String(name))
+            #expect(try store.services(withPrefix: String(name)).isEmpty, "\(name)")
         }
     }
 }

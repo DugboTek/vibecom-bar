@@ -9,11 +9,15 @@ struct AccountMonitorTests {
     static let usageJSON = #"{"five_hour":{"utilization":25,"resets_at":null},"seven_day":{"utilization":80,"resets_at":null}}"#
     static let refreshJSON = #"{"access_token":"at-fresh","refresh_token":"rt-fresh","expires_in":28800}"#
 
+    /// `signedIn` is the email ~/.claude.json names as the signed-in account.
     private func fixture(
-        responses: [(Data, Int)], liveKeychain: Data? = nil
+        responses: [(Data, Int)], liveKeychain: Data? = nil, signedIn: String? = nil
     ) -> (AccountMonitor, AccountVault, MemorySecretStore, MemoryFileStore, StubHTTPClient) {
         let secrets = MemorySecretStore(liveKeychain.map { [ClaudeKeychain.service: $0] } ?? [:])
-        let files = MemoryFileStore()
+        let files = MemoryFileStore(
+            signedIn.map {
+                ["/home/.claude.json": Data(#"{"oauthAccount":{"emailAddress":"\#($0)"}}"#.utf8)]
+            } ?? [:])
         let vault = AccountVault(secrets: secrets, files: files, directory: URL(fileURLWithPath: "/vault"))
         let environment = CLIEnvironment(
             secrets: secrets, files: files,
@@ -95,7 +99,7 @@ struct AccountMonitorTests {
         let live = ClaudeCredentialTests.keychainJSON(accessToken: "at-stale")
         let (monitor, vault, secrets, _, _) = fixture(
             responses: [(Data(Self.refreshJSON.utf8), 200), (Data(Self.usageJSON.utf8), 200)],
-            liveKeychain: live)
+            liveKeychain: live, signedIn: "one@example.com")
         let account = try await vault.add(
             provider: .claude, identity: AccountIdentity(email: "one@example.com"),
             secret: .claude(expiredClaude()))
@@ -111,7 +115,7 @@ struct AccountMonitorTests {
         let live = ClaudeCredentialTests.keychainJSON(accessToken: "at-someone-else")
         let (monitor, vault, secrets, _, _) = fixture(
             responses: [(Data(Self.refreshJSON.utf8), 200), (Data(Self.usageJSON.utf8), 200)],
-            liveKeychain: live)
+            liveKeychain: live, signedIn: "someone-else@example.com")
         let account = try await vault.add(
             provider: .claude, identity: AccountIdentity(email: "one@example.com"),
             secret: .claude(expiredClaude()))
@@ -177,12 +181,12 @@ struct AccountMonitorTests {
         #expect(status.error == .unreachable)
     }
 
-    @Test("checks the signed-in Claude login once per refresh, however many accounts there are")
+    @Test("refreshes without reading Claude Code's keychain item at all")
     func boundedKeychainReads() async throws {
         let live = ClaudeCredentialTests.keychainJSON(accessToken: "at-0")
         let usage = (Data(Self.usageJSON.utf8), 200)
         let (monitor, vault, secrets, _, _) = fixture(
-            responses: Array(repeating: usage, count: 6), liveKeychain: live)
+            responses: Array(repeating: usage, count: 6), liveKeychain: live, signedIn: "0@example.com")
         for index in 0..<3 {
             _ = try await vault.add(
                 provider: .claude, identity: AccountIdentity(email: "\(index)@example.com"),
@@ -193,12 +197,10 @@ struct AccountMonitorTests {
         }
 
         _ = await monitor.refreshAll()
-        let liveAfterFirst = secrets.reads(of: ClaudeKeychain.service)
         _ = await monitor.refreshAll()
 
-        #expect(liveAfterFirst == 1)
-        #expect(secrets.reads(of: ClaudeKeychain.service) == 2)
-        #expect(secrets.reads(withPrefix: "build.vibecom.bar.account.") == 0)
+        #expect(secrets.reads(of: ClaudeKeychain.service) == 0)
+        #expect(secrets.reads(withPrefix: "build.vibecom.bar.") == 0)
     }
 
     @Test("marks which account each CLI would use right now")
@@ -206,7 +208,7 @@ struct AccountMonitorTests {
         let live = ClaudeCredentialTests.keychainJSON(accessToken: "at-good")
         let (monitor, vault, _, _, _) = fixture(
             responses: [(Data(Self.usageJSON.utf8), 200), (Data(Self.usageJSON.utf8), 200)],
-            liveKeychain: live)
+            liveKeychain: live, signedIn: "one@example.com")
         let active = try await vault.add(
             provider: .claude, identity: AccountIdentity(email: "one@example.com"),
             secret: .claude(
