@@ -6,6 +6,7 @@ import VibecomBarCore
 struct TokensCard: View {
     @Environment(\.brand) private var brand
     let summary: TokenSummary?
+    let ticker: TokenTicker
     let isCounting: Bool
 
     var body: some View {
@@ -36,17 +37,8 @@ struct TokensCard: View {
                     LiveBadge(rate: summary.tokensPerMinute)
                 }
             }
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(UsageFormatter.tokens(summary.today.tokens))
-                    .font(.system(size: 26, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                    .animation(.snappy, value: summary.today.tokens)
-                Text("tokens")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-            Text("\(UsageFormatter.dollars(summary.today.cost)) at API prices")
+            TickerNumber(ticker: ticker)
+            Text("tokens · \(UsageFormatter.tokens(summary.today.tokens)) · \(UsageFormatter.dollars(summary.today.cost)) at API prices")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .help(
@@ -118,6 +110,25 @@ struct TokensCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Today's count to the last digit, climbing between readings like a ticker.
+private struct TickerNumber: View {
+    let ticker: TokenTicker
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1.0 / 12)) { context in
+            let value = ticker.value(at: context.date)
+            Text(UsageFormatter.fullTokens(value))
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .contentTransition(.numericText(value: Double(value)))
+                .animation(.snappy(duration: 0.18), value: value)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .accessibilityLabel("\(UsageFormatter.fullTokens(value)) tokens today")
+        }
     }
 }
 

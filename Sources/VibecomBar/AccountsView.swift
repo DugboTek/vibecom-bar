@@ -6,7 +6,7 @@ struct AccountsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            TokensCard(summary: model.tokens, isCounting: model.isCountingTokens)
+            TokensCard(summary: model.tokens, ticker: model.ticker, isCounting: model.isCountingTokens)
 
             if model.hasAccounts {
                 ForEach(Provider.allCases) { provider in

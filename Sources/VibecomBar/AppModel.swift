@@ -26,6 +26,8 @@ final class AppModel {
     /// Tokens spent on this Mac, read live from the CLIs' own transcripts.
     private(set) var tokens: TokenSummary?
     private(set) var isCountingTokens = false
+    /// Glides today's count between readings so it reads like a live ticker.
+    private(set) var ticker = TokenTicker(duration: 5)
     var page: Page = .accounts
 
     var preferences: Preferences {
@@ -93,6 +95,7 @@ final class AppModel {
             while !Task.isCancelled {
                 let summary = await ledger.update(now: Date())
                 await MainActor.run {
+                    self?.ticker.receive(summary.today.tokens, at: Date())
                     self?.tokens = summary
                     self?.isCountingTokens = false
                 }

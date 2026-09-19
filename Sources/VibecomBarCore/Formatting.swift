@@ -71,6 +71,14 @@ public enum UsageFormatter {
         }
     }
 
+    /// Every digit, grouped: 1,634,221,907.
+    public static func fullTokens(_ count: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = Locale(identifier: "en_US")
+        return formatter.string(from: NSNumber(value: count)) ?? "\(count)"
+    }
+
     public static func dollars(_ amount: Double) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
