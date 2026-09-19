@@ -5,6 +5,10 @@ import VibecomBarCore
 struct VibecomBarApp: App {
     @State private var model = AppModel()
 
+    init() {
+        Snapshot.runIfRequested()
+    }
+
     var body: some Scene {
         MenuBarExtra {
             RootView(model: model)
@@ -26,6 +30,11 @@ struct RootView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Bindable var model: AppModel
 
+    /// A scroll view has no height of its own, and a menu bar window sizes to
+    /// its content, so the page is measured and the scroll view given that height.
+    @State private var contentHeight: CGFloat = 120
+    static let maxContentHeight: CGFloat = 520
+
     private var brand: BrandPalette { colorScheme == .dark ? .dark : .light }
 
     var body: some View {
@@ -41,9 +50,17 @@ struct RootView: View {
                     }
                 }
                 .padding(.horizontal, 1)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
+                    })
             }
-            .frame(maxHeight: 460)
+            .frame(height: min(contentHeight, Self.maxContentHeight))
             .scrollBounceBehavior(.basedOnSize)
+            .onPreferenceChange(ContentHeightKey.self) { height in
+                if height > 0 { contentHeight = height }
+            }
 
             footer
         }
@@ -111,5 +128,12 @@ struct RootView: View {
             .help("Quit vibecom bar")
         }
         .environment(\.brand, brand)
+    }
+}
+
+private struct ContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
