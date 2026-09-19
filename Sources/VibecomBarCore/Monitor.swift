@@ -103,6 +103,13 @@ public actor AccountMonitor {
         }
     }
 
+    /// Renews an account's token even though it has not expired, for the
+    /// "renew now" action and for proving the renewal path works.
+    public func renewCredentials(for account: StoredAccount) async throws {
+        let secret = try await vault.secret(for: account.id)
+        _ = try await renewIfNeeded(secret, for: account, force: true)
+    }
+
     private func fetch(_ secret: AccountSecret, provider: Provider) async throws -> UsageSnapshot {
         switch secret {
         case .claude(let credentials): try await usage.fetchUsage(claude: credentials, now: now())

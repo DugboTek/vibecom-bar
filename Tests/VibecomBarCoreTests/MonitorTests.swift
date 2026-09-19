@@ -202,3 +202,60 @@ struct AccountMonitorTests {
         #expect(statuses.first { $0.isActive }?.account.id == active.id)
     }
 }
+
+@Suite("Renewing on demand")
+struct RenewOnDemandTests {
+    static let now = Date(timeIntervalSince1970: 1_789_830_000)
+
+    @Test("renews a token that has not expired yet when asked to")
+    func renewsValidToken() async throws {
+        let secrets = MemorySecretStore()
+        let files = MemoryFileStore()
+        let vault = AccountVault(secrets: secrets, files: files, directory: URL(fileURLWithPath: "/vault"))
+        let environment = CLIEnvironment(
+            secrets: secrets, files: files,
+            claudeConfigFile: URL(fileURLWithPath: "/home/.claude.json"),
+            codexAuthFile: URL(fileURLWithPath: "/home/.codex/auth.json"))
+        let http = StubHTTPClient(json: #"{"access_token":"at-new","refresh_token":"rt-new","expires_in":28800}"#)
+        let monitor = AccountMonitor(
+            vault: vault, activator: AccountActivator(vault: vault, environment: environment),
+            environment: environment, http: http, usage: UsageService(http: http), now: { Self.now })
+        let account = try await vault.add(
+            provider: .claude, identity: AccountIdentity(email: "one@example.com"),
+            secret: .claude(
+                ClaudeCredentials(
+                    accessToken: "at-old", refreshToken: "rt-old",
+                    expiresAt: Self.now.addingTimeInterval(9999), scopes: ["user:profile"])))
+
+        try await monitor.renewCredentials(for: account)
+
+        guard case .claude(let stored) = try await vault.secret(for: account.id) else {
+            Issue.record("expected Claude credentials")
+            return
+        }
+        #expect(stored.accessToken == "at-new")
+        #expect(http.sent.count == 1)
+    }
+
+    @Test("reports a dead refresh token instead of silently leaving the old one")
+    func surfacesDeadRefreshToken() async throws {
+        let secrets = MemorySecretStore()
+        let files = MemoryFileStore()
+        let vault = AccountVault(secrets: secrets, files: files, directory: URL(fileURLWithPath: "/vault"))
+        let environment = CLIEnvironment(
+            secrets: secrets, files: files,
+            claudeConfigFile: URL(fileURLWithPath: "/home/.claude.json"),
+            codexAuthFile: URL(fileURLWithPath: "/home/.codex/auth.json"))
+        let http = StubHTTPClient(json: #"{"error":"invalid_grant"}"#, status: 400)
+        let monitor = AccountMonitor(
+            vault: vault, activator: AccountActivator(vault: vault, environment: environment),
+            environment: environment, http: http, usage: UsageService(http: http), now: { Self.now })
+        let account = try await vault.add(
+            provider: .claude, identity: AccountIdentity(email: "one@example.com"),
+            secret: .claude(ClaudeCredentials(accessToken: "at", refreshToken: "rt", scopes: ["user:profile"])))
+
+        await #expect(throws: OAuthError.needsReauthentication) {
+            try await monitor.renewCredentials(for: account)
+        }
+    }
+}
