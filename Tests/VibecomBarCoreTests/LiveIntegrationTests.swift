@@ -209,3 +209,34 @@ struct LiveTokenLedgerTests {
         #expect(second < .seconds(2))
     }
 }
+
+/// Sums the same transcript files vibecom's CLI sums, file by file, so the two
+/// implementations can be compared on real data.
+@Suite("Live parity with vibecom", .enabled(if: ProcessInfo.processInfo.environment["VIBECOM_PARITY_CLAUDE"] != nil))
+struct LiveParityTests {
+    @Test("counts the same tokens as vibecom's CLI for the same files")
+    func matchesVibecom() throws {
+        let environment = ProcessInfo.processInfo.environment
+        for (tool, variable) in [(CodingTool.claudeCode, "VIBECOM_PARITY_CLAUDE"), (.codex, "VIBECOM_PARITY_CODEX")] {
+            guard let list = environment[variable] else { continue }
+            var total = 0
+            for path in try String(contentsOfFile: list, encoding: .utf8).split(separator: "\n") {
+                let data = try Data(contentsOf: URL(fileURLWithPath: String(path)), options: .alwaysMapped)
+                var messages: [String: TokenEvent] = [:]
+                var codex = CodexTranscript()
+                for line in data.split(separator: 0x0A) {
+                    switch tool {
+                    case .claudeCode:
+                        guard let (key, event) = ClaudeTranscript.parse(Data(line)) else { continue }
+                        if let existing = messages[key], existing.usage.outputTokens > event.usage.outputTokens { continue }
+                        messages[key] = event
+                    case .codex:
+                        if let event = codex.consume(Data(line)) { total += event.usage.total }
+                    }
+                }
+                total += messages.values.reduce(0) { $0 + $1.usage.total }
+            }
+            print("swift \(tool.rawValue): \(total)")
+        }
+    }
+}

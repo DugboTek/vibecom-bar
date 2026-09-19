@@ -177,6 +177,30 @@ struct AccountMonitorTests {
         #expect(status.error == .unreachable)
     }
 
+    @Test("checks the signed-in Claude login once per refresh, however many accounts there are")
+    func boundedKeychainReads() async throws {
+        let live = ClaudeCredentialTests.keychainJSON(accessToken: "at-0")
+        let usage = (Data(Self.usageJSON.utf8), 200)
+        let (monitor, vault, secrets, _, _) = fixture(
+            responses: Array(repeating: usage, count: 6), liveKeychain: live)
+        for index in 0..<3 {
+            _ = try await vault.add(
+                provider: .claude, identity: AccountIdentity(email: "\(index)@example.com"),
+                secret: .claude(
+                    ClaudeCredentials(
+                        accessToken: "at-\(index)", refreshToken: "rt",
+                        expiresAt: Self.now.addingTimeInterval(3600), scopes: ["user:profile"])))
+        }
+
+        _ = await monitor.refreshAll()
+        let liveAfterFirst = secrets.reads(of: ClaudeKeychain.service)
+        _ = await monitor.refreshAll()
+
+        #expect(liveAfterFirst == 1)
+        #expect(secrets.reads(of: ClaudeKeychain.service) == 2)
+        #expect(secrets.reads(withPrefix: "build.vibecom.bar.account.") == 0)
+    }
+
     @Test("marks which account each CLI would use right now")
     func marksActiveAccount() async throws {
         let live = ClaudeCredentialTests.keychainJSON(accessToken: "at-good")

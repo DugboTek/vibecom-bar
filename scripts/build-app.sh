@@ -1,6 +1,10 @@
 #!/bin/zsh
-# Builds "Vibecom Bar.app" — a menu bar app bundle, ad-hoc signed so macOS
-# grants it a stable identity for notifications and login items.
+# Builds "Vibecom Bar.app", signed with a real certificate when one exists.
+#
+# The signature matters more than it looks: the keychain ties "Always Allow" to
+# the app's signing identity. An ad-hoc signature changes on every build, so
+# each rebuild looks like a new app and every saved login prompts again. A
+# Developer ID (or Apple Development) certificate keeps the identity stable.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -50,9 +54,22 @@ else
   echo "› No icon source found; bundling without a custom icon"
 fi
 
-echo "› Signing (ad-hoc)"
-codesign --force --sign - --timestamp=none "$APP" >/dev/null 2>&1 || {
-  echo "  ad-hoc signing failed; the app still runs, but notifications may not appear"
-}
+IDENTITY="${VIBECOM_SIGN_IDENTITY:-}"
+if [[ -z "$IDENTITY" ]]; then
+  IDENTITY=$(security find-identity -v -p codesigning | grep -m1 "Developer ID Application" | sed -E 's/.*"(.*)"/\1/' || true)
+fi
+if [[ -z "$IDENTITY" ]]; then
+  IDENTITY=$(security find-identity -v -p codesigning | grep -m1 "Apple Development" | sed -E 's/.*"(.*)"/\1/' || true)
+fi
+
+if [[ -n "$IDENTITY" ]]; then
+  echo "› Signing as $IDENTITY"
+  codesign --force --options runtime --timestamp=none --sign "$IDENTITY" "$APP"
+else
+  echo "› No signing certificate found; signing ad-hoc."
+  echo "  macOS will ask for keychain access again after every rebuild."
+  codesign --force --sign - --timestamp=none "$APP"
+fi
+codesign --verify --strict "$APP"
 
 echo "✓ Built $APP"

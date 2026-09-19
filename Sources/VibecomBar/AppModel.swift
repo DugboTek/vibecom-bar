@@ -220,7 +220,8 @@ final class AppModel {
             case .claude:
                 let after = try KeychainSecretStore().services(withPrefix: "Claude Code-credentials")
                 if let service = ClaudeKeychain.newService(before: keychainBefore, after: after),
-                    let captured = try? importer.captureClaudeLogin(keychainService: service)
+                    let captured = try? importer.captureClaudeLogin(
+                        keychainService: service, configDir: profile)
                 {
                     return captured
                 }

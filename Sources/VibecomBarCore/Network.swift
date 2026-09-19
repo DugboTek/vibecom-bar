@@ -181,6 +181,15 @@ public struct UsageService: Sendable {
         }
     }
 
+    /// Who a Claude login belongs to, for logins captured without a name.
+    public func fetchProfile(claude credentials: ClaudeCredentials) async throws -> AccountIdentity {
+        var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/profile")!)
+        request.setValue("Bearer \(credentials.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.setValue(UsageService.userAgent, forHTTPHeaderField: "User-Agent")
+        return try ClaudeProfileParser.identity(from: try await perform(request))
+    }
+
     private func perform(_ request: URLRequest) async throws -> Data {
         let (data, response) = try await http.send(request)
         switch response.statusCode {
@@ -189,5 +198,20 @@ public struct UsageService: Sendable {
         case 429: throw UsageError.rateLimited
         default: throw UsageError.server(response.statusCode)
         }
+    }
+}
+
+public enum ClaudeProfileParser {
+    public static func identity(from data: Data) throws -> AccountIdentity {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let account = root["account"] as? [String: Any]
+        else { throw UsageError.parse("profile response had no account") }
+        let organization = root["organization"] as? [String: Any]
+        return AccountIdentity(
+            email: account["email"] as? String,
+            accountUUID: account["uuid"] as? String,
+            organizationUUID: organization?["uuid"] as? String,
+            organizationName: organization?["name"] as? String,
+            plan: organization?["organization_type"] as? String)
     }
 }

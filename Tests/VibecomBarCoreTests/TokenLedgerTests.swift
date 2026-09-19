@@ -183,6 +183,22 @@ struct TokenLedgerTests {
         #expect(summary.today.tokens == 140)
     }
 
+    @Test("re-checks known sessions every tick and walks for new ones once a minute")
+    func discoversNewSessions() async throws {
+        let (root, claude, _) = try sandbox()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write([claudeLine(id: "a", output: 100, at: "2026-09-19T10:00:00Z")], to: claude.appendingPathComponent("s1.jsonl"))
+        let ledger = ledger(root)
+        _ = await ledger.update(now: Self.now)
+
+        try write([claudeLine(id: "b", output: 5, at: "2026-09-19T17:59:00Z")], to: claude.appendingPathComponent("s2.jsonl"))
+        let soon = await ledger.update(now: Self.now.addingTimeInterval(5))
+        let later = await ledger.update(now: Self.now.addingTimeInterval(61))
+
+        #expect(soon.today.tokens == 100)
+        #expect(later.today.tokens == 105)
+    }
+
     @Test("waits for a line that is still being written")
     func skipsPartialLine() async throws {
         let (root, claude, _) = try sandbox()

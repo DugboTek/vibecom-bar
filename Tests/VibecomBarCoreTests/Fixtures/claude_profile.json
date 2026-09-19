@@ -1,0 +1,2 @@
+{"account":{"uuid":"acct-uuid-1","email":"builder@example.com","full_name":"A Builder","display_name":"Builder","has_claude_max":true,"has_claude_pro":false,"created_at":"2026-08-03T23:22:07Z"},
+ "organization":{"uuid":"org-uuid-1","name":"builder@example.com's Organization","organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x","billing_type":"stripe_subscription"}}

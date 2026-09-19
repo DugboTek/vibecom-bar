@@ -70,24 +70,34 @@ public actor AccountMonitor {
 
     public func refreshAll() async -> [AccountStatus] {
         let accounts = (try? await vault.accounts()) ?? []
+        // Which login each CLI holds is checked once per provider, not once per account.
+        var active: [Provider: UUID] = [:]
+        for provider in Set(accounts.map(\.provider)) {
+            active[provider] = (try? await activator.activeAccountID(for: provider)) ?? nil
+        }
+
         var statuses: [AccountStatus] = []
         for account in accounts {
-            statuses.append(await refresh(account))
+            statuses.append(await refresh(account, isActive: active[account.provider] == account.id))
         }
         return statuses
     }
 
     public func refresh(_ account: StoredAccount) async -> AccountStatus {
         let isActive = ((try? await activator.activeAccountID(for: account.provider)) ?? nil) == account.id
+        return await refresh(account, isActive: isActive)
+    }
 
+    private func refresh(_ account: StoredAccount, isActive: Bool) async -> AccountStatus {
         do {
             let secret = try await vault.secret(for: account.id)
             let usable = try await renewIfNeeded(secret, for: account, force: false)
             do {
                 let snapshot = try await fetch(usable, provider: account.provider)
                 lastGood[account.id] = snapshot
+                let named = await named(account, using: usable)
                 return AccountStatus(
-                    account: account, snapshot: snapshot, error: nil, isActive: isActive)
+                    account: named, snapshot: snapshot, error: nil, isActive: isActive)
             } catch UsageError.unauthorized {
                 // The provider disagreed about the token's life; renew once and retry.
                 let renewed = try await renewIfNeeded(usable, for: account, force: true)
@@ -101,6 +111,17 @@ public actor AccountMonitor {
                 account: account, snapshot: lastGood[account.id], error: Self.classify(error),
                 isActive: isActive)
         }
+    }
+
+    /// Fills in who a Claude account belongs to when it was saved without an
+    /// email. Best effort: a failure leaves the account as it was.
+    private func named(_ account: StoredAccount, using secret: AccountSecret) async -> StoredAccount {
+        guard account.identity.email == nil, case .claude(let credentials) = secret,
+            let identity = try? await usage.fetchProfile(claude: credentials),
+            identity.email != nil,
+            let updated = try? await vault.fillIdentity(account.id, with: identity)
+        else { return account }
+        return updated
     }
 
     /// Renews an account's token even though it has not expired, for the

@@ -8,10 +8,20 @@ import Testing
 final class MemorySecretStore: SecretStore, @unchecked Sendable {
     private let lock = NSLock()
     private var items: [String: Data]
+    private var readLog: [String] = []
 
     init(_ seed: [String: Data] = [:]) { items = seed }
 
-    func read(service: String) throws -> Data? { lock.withLock { items[service] } }
+    /// Every keychain read can cost the user a password prompt, so tests count them.
+    func reads(of service: String) -> Int { lock.withLock { readLog.filter { $0 == service }.count } }
+    func reads(withPrefix prefix: String) -> Int { lock.withLock { readLog.filter { $0.hasPrefix(prefix) }.count } }
+
+    func read(service: String) throws -> Data? {
+        lock.withLock {
+            readLog.append(service)
+            return items[service]
+        }
+    }
     func write(_ data: Data, service: String) throws { lock.withLock { items[service] = data } }
     func delete(service: String) throws { lock.withLock { items[service] = nil } }
     func services(withPrefix prefix: String) throws -> [String] {
@@ -104,6 +114,21 @@ struct AccountVaultTests {
         let accounts = try await vault.accounts()
         #expect(accounts.count == 1)
         #expect(try await vault.secret(for: accounts[0].id) == .claude(ClaudeCredentials(accessToken: "new")))
+    }
+
+    @Test("reads each saved login from the keychain once, not on every refresh")
+    func cachesSecrets() async throws {
+        let secrets = MemorySecretStore()
+        let files = MemoryFileStore()
+        let first = makeVault(secrets: secrets, files: files)
+        let account = try await first.add(
+            provider: .claude, identity: AccountIdentity(email: "one@example.com"),
+            secret: .claude(ClaudeCredentials(accessToken: "at")))
+        let vault = makeVault(secrets: secrets, files: files)
+
+        for _ in 0..<5 { _ = try await vault.secret(for: account.id) }
+
+        #expect(secrets.reads(withPrefix: "build.vibecom.bar.account.") == 1)
     }
 
     @Test("removing an account takes its tokens out of the keychain too")

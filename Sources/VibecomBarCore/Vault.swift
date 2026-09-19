@@ -72,6 +72,9 @@ public actor AccountVault {
     private let files: FileStore
     private let directory: URL
     private var cache: [StoredAccount]?
+    /// Every keychain read can put a password prompt in front of the user, so
+    /// each saved login is read once per launch and kept in memory after that.
+    private var secretCache: [UUID: AccountSecret] = [:]
 
     public init(secrets: SecretStore, files: FileStore, directory: URL) {
         self.secrets = secrets
@@ -125,10 +128,13 @@ public actor AccountVault {
     }
 
     public func secret(for id: UUID) throws -> AccountSecret {
+        if let cached = secretCache[id] { return cached }
         guard let data = try secrets.read(service: Self.secretServicePrefix + id.uuidString) else {
             throw VaultError.missingSecret(id)
         }
-        return try JSONDecoder().decode(AccountSecret.self, from: data)
+        let secret = try JSONDecoder().decode(AccountSecret.self, from: data)
+        secretCache[id] = secret
+        return secret
     }
 
     public func update(secret: AccountSecret, for id: UUID) throws {
@@ -146,6 +152,24 @@ public actor AccountVault {
         return all[index]
     }
 
+    /// Records who an account belongs to. A name the user chose is kept; the
+    /// placeholder name an unnamed login got is replaced by the email.
+    @discardableResult
+    public func fillIdentity(_ id: UUID, with identity: AccountIdentity) throws -> StoredAccount {
+        var all = try accounts()
+        guard let index = all.firstIndex(where: { $0.id == id }) else {
+            throw VaultError.unknownAccount(id)
+        }
+        let placeholder = Self.defaultLabel(for: all[index].identity, provider: all[index].provider)
+        let hadPlaceholderName = all[index].label == placeholder
+        all[index].identity = identity
+        if hadPlaceholderName {
+            all[index].label = Self.defaultLabel(for: identity, provider: all[index].provider)
+        }
+        try persist(all)
+        return all[index]
+    }
+
     public func reorder(_ ids: [UUID]) throws {
         var all = try accounts()
         for (index, id) in ids.enumerated() {
@@ -159,12 +183,14 @@ public actor AccountVault {
     public func remove(_ id: UUID) throws {
         let all = try accounts().filter { $0.id != id }
         try secrets.delete(service: Self.secretServicePrefix + id.uuidString)
+        secretCache[id] = nil
         try persist(all)
     }
 
     private func writeSecret(_ secret: AccountSecret, for id: UUID) throws {
         let data = try JSONEncoder().encode(secret)
         try secrets.write(data, service: Self.secretServicePrefix + id.uuidString)
+        secretCache[id] = secret
     }
 
     private func persist(_ all: [StoredAccount]) throws {
@@ -321,15 +347,21 @@ public struct AccountImporter: Sendable {
         return try captureClaudeLogin(keychainService: ClaudeKeychain.service, payload: data)
     }
 
-    /// Captures a sign-in that ran under its own CLAUDE_CONFIG_DIR.
-    public func captureClaudeLogin(keychainService: String) throws -> CapturedLogin {
+    /// Captures a sign-in that ran under its own CLAUDE_CONFIG_DIR, named after
+    /// the account recorded in that directory's own `.claude.json`.
+    public func captureClaudeLogin(keychainService: String, configDir: URL) throws -> CapturedLogin {
         guard let data = try environment.secrets.read(service: keychainService) else {
             throw ImportError.noActiveLogin(.claude)
         }
-        return try captureClaudeLogin(keychainService: keychainService, payload: data)
+        return try captureClaudeLogin(
+            payload: data, profileFile: configDir.appendingPathComponent(".claude.json"))
     }
 
     private func captureClaudeLogin(keychainService: String, payload: Data) throws -> CapturedLogin {
+        try captureClaudeLogin(payload: payload, profileFile: environment.claudeConfigFile)
+    }
+
+    private func captureClaudeLogin(payload: Data, profileFile: URL) throws -> CapturedLogin {
         let credentials: ClaudeCredentials
         do {
             credentials = try ClaudeCredentials(keychainJSON: payload)
@@ -339,8 +371,7 @@ public struct AccountImporter: Sendable {
         guard credentials.canReadUsage else { throw ImportError.cannotReadUsage }
 
         var identity = AccountIdentity(plan: credentials.subscriptionType)
-        if keychainService == ClaudeKeychain.service,
-            let profile = try environment.files.read(environment.claudeConfigFile),
+        if let profile = try environment.files.read(profileFile),
             let fromProfile = ClaudeProfileFile.identity(fromJSON: profile)
         {
             identity = fromProfile

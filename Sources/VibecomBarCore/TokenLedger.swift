@@ -205,6 +205,11 @@ public actor TokenLedger {
     private let lookback: TimeInterval
 
     private var files: [String: FileState] = [:]
+    /// Transcripts seen in the last full walk. Between walks only these are
+    /// re-checked, which is a stat per file instead of walking thousands of folders.
+    private var known: [String: CodingTool] = [:]
+    private var lastWalk: Date?
+    static let walkInterval: TimeInterval = 60
     /// Claude repeats a message while it streams and copies history into
     /// resumed sessions; keyed by message, the largest output wins.
     private var claudeMessages: [String: TokenEvent] = [:]
@@ -225,9 +230,22 @@ public actor TokenLedger {
     }
 
     public func update(now: Date = Date()) async -> TokenSummary {
+        let trace = ProcessInfo.processInfo.environment["VIBECOM_LEDGER_TRACE"] != nil
+        var mark = Date()
+        func lap(_ label: String) {
+            guard trace else { return }
+            print("  ledger \(label): \(String(format: "%.3f", Date().timeIntervalSince(mark)))s")
+            mark = Date()
+        }
         let cutoff = now.addingTimeInterval(-lookback)
-        let pending = changedFiles(root: claudeRoot, tool: .claudeCode, cutoff: cutoff)
-            + changedFiles(root: codexRoot, tool: .codex, cutoff: cutoff)
+        if lastWalk.map({ now.timeIntervalSince($0) >= Self.walkInterval || now < $0 }) ?? true {
+            known = [:]
+            walk(root: claudeRoot, tool: .claudeCode)
+            walk(root: codexRoot, tool: .codex)
+            lastWalk = now
+        }
+        let pending = known.compactMap { path, tool in changedFile(path: path, tool: tool, cutoff: cutoff) }
+        lap("enumerate (\(pending.count) changed)")
 
         // Files are independent, so they are read on every core at once.
         let results = await withTaskGroup(of: FileRead.self) { group in
@@ -235,6 +253,7 @@ public actor TokenLedger {
                 group.addTask { Self.read(job) }
             }
             var collected: [FileRead] = []
+            collected.reserveCapacity(pending.count)
             for await result in group { collected.append(result) }
             return collected
         }
@@ -251,9 +270,13 @@ public actor TokenLedger {
             codexEvents.append(contentsOf: result.codex)
             files[result.job.path] = result.state
         }
+        lap("read+merge (\(claudeMessages.count) claude, \(codexEvents.count) codex)")
 
         prune(before: cutoff)
-        return summarize(now: now)
+        lap("prune")
+        let summary = summarize(now: now)
+        lap("summarize")
+        return summary
     }
 
     private struct ReadJob: Sendable {
@@ -271,28 +294,30 @@ public actor TokenLedger {
         let codex: [TokenEvent]
     }
 
-    private func changedFiles(root: URL, tool: CodingTool, cutoff: Date) -> [ReadJob] {
-        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
-        guard
-            let enumerator = FileManager.default.enumerator(
-                at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
-        else { return [] }
-
-        var jobs: [ReadJob] = []
-        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-            guard let values = try? url.resourceValues(forKeys: Set(keys)),
-                values.isRegularFile == true,
-                let modified = values.contentModificationDate, modified >= cutoff
-            else { continue }
-            let size = UInt64(values.fileSize ?? 0)
-
-            var state = files[url.path] ?? FileState()
-            guard size != state.size || modified != state.modified else { continue }
-            // Rewritten from scratch: start over rather than read garbage.
-            if size < state.offset { state = FileState() }
-            jobs.append(ReadJob(path: url.path, tool: tool, state: state, size: size, modified: modified))
+    /// Walks with plain paths: Foundation's URL enumerator with resource values
+    /// was forty times slower than `find` over the same tree.
+    private func walk(root: URL, tool: CodingTool) {
+        guard let enumerator = FileManager.default.enumerator(atPath: root.path) else { return }
+        while let relative = enumerator.nextObject() as? String {
+            guard relative.hasSuffix(".jsonl") else { continue }
+            known[root.path + "/" + relative] = tool
         }
-        return jobs
+    }
+
+    private func changedFile(path: String, tool: CodingTool, cutoff: Date) -> ReadJob? {
+        var info = stat()
+        guard stat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
+        let modifiedSeconds =
+            Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000
+        guard modifiedSeconds >= cutoff.timeIntervalSince1970 else { return nil }
+        let modified = Date(timeIntervalSince1970: modifiedSeconds)
+        let size = UInt64(info.st_size)
+
+        var state = files[path] ?? FileState()
+        guard size != state.size || modified != state.modified else { return nil }
+        // Rewritten from scratch: start over rather than read garbage.
+        if size < state.offset { state = FileState() }
+        return ReadJob(path: path, tool: tool, state: state, size: size, modified: modified)
     }
 
     private static func read(_ job: ReadJob) -> FileRead {
