@@ -23,6 +23,9 @@ final class AppModel {
     private(set) var lastUpdated: Date?
     private(set) var isRefreshing = false
     private(set) var signInState: SignInState = .idle
+    /// Tokens spent on this Mac, read live from the CLIs' own transcripts.
+    private(set) var tokens: TokenSummary?
+    private(set) var isCountingTokens = false
     var page: Page = .accounts
 
     var preferences: Preferences {
@@ -42,6 +45,10 @@ final class AppModel {
     private let support: URL
 
     private var timerTask: Task<Void, Never>?
+    private var tokenTask: Task<Void, Never>?
+    private let ledger = TokenLedger()
+    /// Transcripts are re-checked this often; an update costs a few milliseconds.
+    static let tokenInterval: Duration = .seconds(5)
     private var signInTask: Task<Void, Never>?
     private var notificationsAuthorized = false
 
@@ -65,11 +72,32 @@ final class AppModel {
 
     // MARK: - Lifecycle
 
+    private var started = false
+
+    /// Safe to call more than once; the menu bar label can appear repeatedly.
     func start() {
+        guard !started else { return }
+        started = true
         Task {
             await requestNotificationPermission()
             await refresh()
             restartTimer()
+        }
+        startTokenFeed()
+    }
+
+    func startTokenFeed() {
+        tokenTask?.cancel()
+        isCountingTokens = tokens == nil
+        tokenTask = Task { [weak self, ledger] in
+            while !Task.isCancelled {
+                let summary = await ledger.update(now: Date())
+                await MainActor.run {
+                    self?.tokens = summary
+                    self?.isCountingTokens = false
+                }
+                try? await Task.sleep(for: Self.tokenInterval)
+            }
         }
     }
 
@@ -83,6 +111,35 @@ final class AppModel {
                 await self?.refresh()
             }
         }
+    }
+
+    /// Sample accounts for layout snapshots, so rendering the UI never touches
+    /// the keychain (and never puts a password prompt on screen).
+    func loadPreviewAccounts() {
+        let now = Date()
+        func window(_ id: String, _ label: String, _ kind: UsageWindow.Kind, _ used: Double, _ hours: Double) -> UsageWindow {
+            UsageWindow(id: id, label: label, kind: kind, usedFraction: used, resetsAt: now.addingTimeInterval(hours * 3600))
+        }
+        func status(_ provider: Provider, _ label: String, _ plan: String, active: Bool, _ windows: [UsageWindow], resets: ResetCredits? = nil) -> AccountStatus {
+            AccountStatus(
+                account: StoredAccount(provider: provider, label: label, identity: AccountIdentity(email: label, plan: plan)),
+                snapshot: UsageSnapshot(provider: provider, windows: windows, plan: plan, email: label, accountID: nil, fetchedAt: now, resetCredits: resets),
+                isActive: active)
+        }
+        statuses = [
+            status(.claude, "work@example.com", "claude_max", active: true, [
+                window("s", "5-hour session", .session, 0.03, 1.2),
+                window("w", "Weekly (all models)", .weekly, 0.01, 152),
+                window("f", "Weekly (Fable)", .weeklyModel, 0, 152),
+            ]),
+            status(.claude, "personal@example.com", "claude_max", active: false, [
+                window("s", "5-hour session", .session, 0.86, 0.7),
+                window("w", "Weekly (all models)", .weekly, 0.41, 60),
+            ]),
+            status(.codex, "main@example.com", "pro", active: true, [window("p", "Weekly", .weekly, 0.22, 164)], resets: ResetCredits(available: 1, usableNow: 0)),
+            status(.codex, "side@example.com", "pro", active: false, [window("p", "Weekly", .weekly, 1, 26)], resets: ResetCredits(available: 2, usableNow: 1)),
+        ]
+        lastUpdated = now
     }
 
     // MARK: - Reading usage
@@ -103,7 +160,7 @@ final class AppModel {
     }
 
     var menuBarText: String {
-        MenuBarTitle.text(for: statuses, style: preferences.menuBarStyle)
+        MenuBarTitle.text(for: statuses, style: preferences.menuBarStyle, tokens: tokens)
     }
 
     func statuses(for provider: Provider) -> [AccountStatus] {

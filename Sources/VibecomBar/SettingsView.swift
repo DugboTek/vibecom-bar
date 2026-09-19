@@ -3,63 +3,79 @@ import SwiftUI
 import VibecomBarCore
 
 struct SettingsView: View {
-    @Environment(\.brand) private var brand
     @Bindable var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            section("Menu bar") {
-                Picker("Show", selection: $model.preferences.menuBarStyle) {
-                    ForEach(MenuBarStyle.allCases, id: \.self) { style in
-                        Text(style.displayName).tag(style)
+        VStack(alignment: .leading, spacing: 14) {
+            group("Menu Bar") {
+                row("Show") {
+                    Picker("Show", selection: $model.preferences.menuBarStyle) {
+                        ForEach(MenuBarStyle.allCases, id: \.self) { style in
+                            Text(style.displayName).tag(style)
+                        }
                     }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .fixedSize()
                 }
-                .pickerStyle(.menu)
+                Divider().padding(.leading, 12)
+                row("Check limits every") {
+                    Picker("Check limits every", selection: $model.preferences.refreshInterval) {
+                        ForEach([60.0, 120, 300, 600, 900, 1800], id: \.self) { seconds in
+                            Text(seconds < 3600 ? "\(Int(seconds / 60)) min" : "1 hour").tag(seconds)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                }
+            }
+
+            group("Notifications") {
+                toggle(
+                    "Warn at 80% and 95%",
+                    isOn: Binding(
+                        get: { !model.preferences.alertThresholds.isEmpty },
+                        set: { model.preferences.alertThresholds = $0 ? [0.8, 0.95] : [] }))
+                Divider().padding(.leading, 12)
+                toggle("Tell me when a limit resets", isOn: $model.preferences.notifyOnReset)
+            }
+
+            group("General") {
+                toggle("Open at login", isOn: launchAtLogin)
+            }
+
+            Text("Right-click an account to rename or remove it.")
                 .font(.system(size: 11))
-            }
-
-            section("Check usage every") {
-                HStack(spacing: 8) {
-                    Slider(
-                        value: $model.preferences.refreshInterval,
-                        in: Preferences.minimumRefreshInterval...Preferences.maximumRefreshInterval,
-                        step: 60)
-                    Text(intervalLabel)
-                        .font(.system(size: 11, weight: .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(Color(brand.muted))
-                        .frame(width: 58, alignment: .trailing)
-                }
-            }
-
-            section("Alerts") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Toggle(
-                        "Warn at 80% and 95%",
-                        isOn: Binding(
-                            get: { !model.preferences.alertThresholds.isEmpty },
-                            set: { model.preferences.alertThresholds = $0 ? [0.8, 0.95] : [] })
-                    )
-                    Toggle("Say when a limit resets", isOn: $model.preferences.notifyOnReset)
-                    Toggle("Start at login", isOn: launchAtLogin)
-                }
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11))
-            }
-
-            HStack {
-                BarButton(title: "Add account", systemImage: "plus") { model.page = .addAccount }
-                Spacer()
-                Text("Right-click an account to rename or remove it.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color(brand.muted))
-            }
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 4)
         }
     }
 
-    private var intervalLabel: String {
-        let minutes = Int(model.preferences.refreshInterval / 60)
-        return minutes == 1 ? "1 min" : "\(minutes) min"
+    private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SectionTitle(text: title)
+            Card { content() }
+        }
+    }
+
+    private func row<Control: View>(_ title: String, @ViewBuilder control: () -> Control) -> some View {
+        HStack {
+            Text(title).font(.system(size: 12))
+            Spacer()
+            control()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+    }
+
+    private func toggle(_ title: String, isOn: Binding<Bool>) -> some View {
+        row(title) {
+            Toggle(title, isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+        }
     }
 
     private var launchAtLogin: Binding<Bool> {
@@ -79,14 +95,5 @@ struct SettingsView: View {
                     model.preferences.launchAtLogin = !enabled
                 }
             })
-    }
-
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color(brand.muted))
-            content()
-        }
     }
 }

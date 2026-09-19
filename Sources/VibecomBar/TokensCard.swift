@@ -1,0 +1,145 @@
+import SwiftUI
+import VibecomBarCore
+
+/// What this Mac has spent today, counted from the CLIs' own transcripts and
+/// priced the same way vibecom.build prices it.
+struct TokensCard: View {
+    @Environment(\.brand) private var brand
+    let summary: TokenSummary?
+    let isCounting: Bool
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                if let summary {
+                    header(summary)
+                    Sparkline(
+                        values: summary.hourly,
+                        currentHour: Calendar.current.component(.hour, from: Date()))
+                    split(summary)
+                } else {
+                    counting
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func header(_ summary: TokenSummary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Today")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if summary.isLive(at: Date()) {
+                    LiveBadge(rate: summary.tokensPerMinute)
+                }
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(UsageFormatter.tokens(summary.today.tokens))
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: summary.today.tokens)
+                Text("tokens")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            Text("\(UsageFormatter.dollars(summary.today.cost)) at API prices")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .help(
+                    "What these tokens would cost at list API prices. Subscriptions are not billed this — it is the same figure vibecom.build shows."
+                )
+        }
+    }
+
+    private func split(_ summary: TokenSummary) -> some View {
+        let total = max(summary.today.tokens, 1)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                ForEach(CodingTool.allCases) { tool in
+                    let tokens = summary.byTool[tool]?.tokens ?? 0
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(tool == .claudeCode ? Color(brand.accent) : Color(brand.signal))
+                            .frame(width: 6, height: 6)
+                        Text(tool.displayName)
+                            .foregroundStyle(.secondary)
+                        Text(UsageFormatter.tokens(tokens))
+                            .monospacedDigit()
+                        Text("\(Int((Double(tokens) / Double(total) * 100).rounded()))%")
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
+                    }
+                }
+            }
+            .font(.system(size: 11))
+
+            Divider()
+
+            HStack {
+                Text("Last 7 days")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(UsageFormatter.tokens(summary.week.tokens)) · \(UsageFormatter.dollars(summary.week.cost))")
+                    .monospacedDigit()
+            }
+            .font(.system(size: 11))
+
+            if let top = summary.topModels.first {
+                HStack {
+                    Text("Top model")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(top.model) · \(UsageFormatter.tokens(top.totals.tokens))")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.system(size: 11))
+            }
+        }
+    }
+
+    private var counting: some View {
+        HStack(spacing: 8) {
+            if isCounting {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "text.page.slash").foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(isCounting ? "Counting this week's tokens…" : "No transcripts found yet")
+                    .font(.system(size: 12, weight: .medium))
+                Text("Read from Claude Code and Codex on this Mac. Nothing is uploaded.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct LiveBadge: View {
+    @Environment(\.brand) private var brand
+    let rate: Int
+    @State private var pulse = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(Color(brand.signal))
+                .frame(width: 6, height: 6)
+                .scaleEffect(pulse ? 1 : 0.6)
+                .opacity(pulse ? 1 : 0.5)
+                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+                .onAppear { pulse = true }
+            Text("\(UsageFormatter.tokens(rate))/min")
+                .font(.system(size: 11, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
+        .help("Tokens per minute over the last five minutes")
+    }
+}

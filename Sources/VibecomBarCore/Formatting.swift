@@ -95,12 +95,15 @@ public enum MenuBarStyle: String, Codable, Sendable, CaseIterable {
     case activeAccounts
     /// The single account closest to running out, whichever it is.
     case highestUsage
+    /// Today's tokens across every CLI on this Mac.
+    case tokensToday
     case iconOnly
 
     public var displayName: String {
         switch self {
         case .activeAccounts: "Signed-in accounts"
         case .highestUsage: "Closest to its limit"
+        case .tokensToday: "Tokens today"
         case .iconOnly: "Icon only"
         }
     }
@@ -114,8 +117,13 @@ public enum MenuBarTitle {
         }
     }
 
-    public static func text(for statuses: [AccountStatus], style: MenuBarStyle) -> String {
+    public static func text(
+        for statuses: [AccountStatus], style: MenuBarStyle, tokens: TokenSummary? = nil
+    ) -> String {
         guard style != .iconOnly else { return "" }
+        if style == .tokensToday {
+            return tokens.map { UsageFormatter.tokens($0.today.tokens) } ?? ""
+        }
 
         let candidates: [AccountStatus]
         switch style {
@@ -127,7 +135,7 @@ public enum MenuBarTitle {
             candidates = [statuses.max { lhs, rhs in
                 (lhs.headline?.usedFraction ?? -1) < (rhs.headline?.usedFraction ?? -1)
             }].compactMap { $0 }
-        case .iconOnly:
+        case .iconOnly, .tokensToday:
             candidates = []
         }
 

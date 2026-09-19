@@ -11,19 +11,28 @@ limits.
 
 ## What it shows
 
-Per account, whatever that provider reports:
+**Tokens, live.** Today's tokens across every Claude Code and Codex session on
+this Mac, what they would cost at API list prices, the rate right now, an
+hour-by-hour chart, the split between the two CLIs, the last seven days and the
+busiest model. It is read from the transcripts the CLIs already write, using a
+port of vibecom's own counter (`cli/src/transcripts.ts` and `pricing.ts`) —
+checked token-for-token against it on real transcripts. Nothing is uploaded.
+
+**Limits, per account.** Whatever each provider reports:
 
 | Provider | Windows |
 |---|---|
 | Claude Code | 5-hour session, weekly (all models), weekly per model when the plan has one |
-| Codex | weekly, and the shorter session window when the plan has one |
+| Codex | weekly, the shorter session window when the plan has one, and how many limit resets the account can spend |
 
-Each window shows how much is spent, a countdown to its reset, and the exact
-reset time on hover. The account each CLI would use right now is marked **in
+Claude limits come from the same `limits` list Claude Code's `/usage` screen
+renders, so the two always agree. Each window shows how much is spent and a
+countdown to its reset (exact time on hover); each account also says when its
+most pressing limit resets, or when a spent account is usable again. The account each CLI would use right now is marked **in
 use**; the rest are one click away.
 
-The menu bar itself shows either the signed-in accounts (`CC 20% · CX 99%`), the
-single account closest to its limit, or just the icon.
+The menu bar itself shows the signed-in accounts (`CC 20% · CX 99%`), the single
+account closest to its limit, today's tokens (`1.3B`), or just the icon.
 
 ## Install
 
@@ -32,9 +41,12 @@ single account closest to its limit, or just the icon.
 open "Vibecom Bar.app"          # or move it to /Applications first
 ```
 
-Requires macOS 14+ and the `claude` and `codex` CLIs on your PATH. The build
-script ad-hoc signs the bundle, which is what lets macOS deliver its
-notifications and register it as a login item.
+Requires macOS 14+ and the `claude` and `codex` CLIs. The build script signs
+with your Developer ID (or Apple Development) certificate when one is installed.
+That matters: the keychain ties "Always Allow" to the app's signing identity. An
+ad-hoc signature changes on every build, so each rebuild would look like a new
+app and every saved login would prompt again. Set `VIBECOM_SIGN_IDENTITY` to
+choose a certificate.
 
 ## Adding accounts
 
@@ -49,11 +61,12 @@ Two ways, both in **Add account**:
 
 Repeat per account. Rename or remove any of them by right-clicking its row.
 
-**macOS will ask for keychain access the first time** vibecom bar reads Claude
-Code's saved login. That is macOS doing its job: the login belongs to the
-`claude` binary, and anything else reading it needs your say-so. Choose **Always
-Allow** and it stays quiet after that. Codex keeps its login in a file, so it
-never prompts.
+**macOS asks for keychain access once per saved login** — choose **Always
+Allow**. vibecom bar reads each of its own saved logins once per launch and keeps
+it in memory, and checks Claude Code's signed-in login once per refresh, so
+there is nothing to keep prompting about. Reading Claude Code's own login
+prompts once too: it belongs to the `claude` binary, and anything else reading
+it needs your say-so. Codex keeps its login in a file, so it never prompts.
 
 ### `claude setup-token` logins don't work
 
@@ -102,7 +115,7 @@ offers the guided sign-in.
 | Guided sign-in profiles | `~/Library/Application Support/VibecomBar/profiles/<uuid>` |
 
 No tokens are written to any file by this app, and nothing leaves the machine
-except the two usage requests below.
+except the provider requests below.
 
 ## The endpoints it calls
 
@@ -110,6 +123,7 @@ except the two usage requests below.
 |---|---|
 | Claude usage | `GET api.anthropic.com/api/oauth/usage` |
 | Claude renewal | `POST console.anthropic.com/v1/oauth/token` |
+| Claude account name (only when unknown) | `GET api.anthropic.com/api/oauth/profile` |
 | Codex usage | `GET chatgpt.com/backend-api/wham/usage` |
 | Codex renewal | `POST auth.openai.com/oauth/token` |
 
@@ -121,9 +135,9 @@ parser is updated.
 ## Development
 
 ```bash
-swift test                                   # 105 tests, no network, no keychain writes outside its own items
+swift test                                   # 159 tests, no network, no keychain writes outside its own items
 swift build && swift run VibecomBar          # run without bundling (no notifications or login item)
-./scripts/build-app.sh                       # bundle + ad-hoc sign
+./scripts/build-app.sh                       # bundle + sign
 ```
 
 Live checks against the real providers are opt-in:
@@ -131,6 +145,13 @@ Live checks against the real providers are opt-in:
 ```bash
 VIBECOM_LIVE=1 swift test --filter LiveIntegrationTests   # read-only
 VIBECOM_LIVE_RENEW=1 swift test --filter LiveRenewalTests # rotates a real Codex token
+```
+
+Layout snapshots render a page to PNG using sample accounts, so they never touch
+the keychain (`--tokens` adds this Mac's real token count):
+
+```bash
+.build/release/VibecomBar --snapshot accounts out.png [--dark] [--tokens]
 ```
 
 ### Layout
@@ -146,6 +167,8 @@ VIBECOM_LIVE_RENEW=1 swift test --filter LiveRenewalTests # rotates a real Codex
 | `Monitor.swift` | renew-then-read per account, last-good readings, active-account detection |
 | `Preferences.swift` | settings, alert rules, guided sign-in commands |
 | `Theme.swift` | vibecom's oklch tokens, converted to sRGB |
+| `Pricing.swift` | list prices, mirrored from vibecom's `pricing.ts` and its tests |
+| `TokenLedger.swift` | incremental, parallel transcript reading; today / week / hourly / live totals |
 
 `VibecomBar` is the SwiftUI menu bar app on top of it.
 
@@ -153,8 +176,8 @@ VIBECOM_LIVE_RENEW=1 swift test --filter LiveRenewalTests # rotates a real Codex
 
 - Usage numbers are whatever the provider reports; there is no local estimate to
   cross-check them against.
-- Claude reports `utilization` as a fraction on some plans and a percentage on
-  others, so anything above 1 is read as a percentage.
+- Token cost is an API-equivalent figure, not a bill: subscriptions are not
+  charged per token. It is the same number vibecom.build shows.
 - Cost in dollars is only populated for some plans, so it is not shown.
 - The app polls; it does not watch. Default is every 5 minutes, adjustable
   between 1 and 60.

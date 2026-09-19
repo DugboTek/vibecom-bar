@@ -85,6 +85,18 @@ struct MenuBarTitleTests {
         #expect(title == "CX 91%")
     }
 
+    @Test("can show today's token count instead of limits")
+    func showsTokensToday() {
+        var summary = TokenSummary()
+        summary.today.tokens = 1_284_000_000
+
+        let title = MenuBarTitle.text(
+            for: [status(.claude, label: "work", used: 0.2, active: true)], style: .tokensToday,
+            tokens: summary)
+
+        #expect(title == "1.3B")
+    }
+
     @Test("falls back to the brand mark before any account is added")
     func emptyState() {
         #expect(MenuBarTitle.text(for: [], style: .activeAccounts) == "")

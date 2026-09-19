@@ -20,7 +20,10 @@ struct VibecomBarApp: App {
                     Text(text).font(.system(size: 11, weight: .medium)).monospacedDigit()
                 }
             }
-            .onAppear { model.start() }
+            .onAppear {
+                // A snapshot run renders sample accounts and must never read the keychain.
+                if !Snapshot.isRequested { model.start() }
+            }
         }
         .menuBarExtraStyle(.window)
     }
@@ -33,13 +36,16 @@ struct RootView: View {
     /// A scroll view has no height of its own, and a menu bar window sizes to
     /// its content, so the page is measured and the scroll view given that height.
     @State private var contentHeight: CGFloat = 120
-    static let maxContentHeight: CGFloat = 520
+    static let maxContentHeight: CGFloat = 560
 
     private var brand: BrandPalette { colorScheme == .dark ? .dark : .light }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             header
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 10)
 
             ScrollView {
                 Group {
@@ -49,7 +55,8 @@ struct RootView: View {
                     case .settings: SettingsView(model: model)
                     }
                 }
-                .padding(.horizontal, 1)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 4)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(
                     GeometryReader { proxy in
@@ -62,72 +69,67 @@ struct RootView: View {
                 if height > 0 { contentHeight = height }
             }
 
+            Divider().padding(.top, 8)
             footer
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
         }
-        .padding(13)
-        .frame(width: 352)
-        .background(Color(brand.canvas))
+        .frame(width: 372)
+        .tint(Color(brand.accent))
         .environment(\.brand, brand)
     }
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 6) {
             if model.page == .accounts {
                 Wordmark()
             } else {
-                BarButton(title: "Back", systemImage: "chevron.left") {
+                Button {
                     model.cancelSignIn()
                     model.page = .accounts
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
+                        Text(model.page == .addAccount ? "Add Account" : "Settings")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
                 }
-                Text(model.page == .addAccount ? "Add account" : "Settings")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(brand.foreground))
+                .buttonStyle(.plain)
+                .help("Back to accounts")
             }
 
             Spacer()
 
             if model.isRefreshing {
-                ProgressView().controlSize(.small)
+                ProgressView().controlSize(.small).frame(width: 24, height: 24)
             } else {
-                Button {
+                IconButton(systemImage: "arrow.clockwise", help: "Check limits now") {
                     Task { await model.refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(brand.muted))
                 }
-                .buttonStyle(.plain)
-                .help("Check usage now")
+            }
+            if model.page == .accounts {
+                IconButton(systemImage: "gearshape", help: "Settings") { model.page = .settings }
             }
         }
     }
 
     private var footer: some View {
         HStack(spacing: 8) {
-            if let lastUpdated = model.lastUpdated, model.page == .accounts {
-                Text("Updated \(UsageFormatter.relative(lastUpdated, from: Date()))")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color(brand.muted))
+            if let lastUpdated = model.lastUpdated {
+                Text("Limits updated \(UsageFormatter.relative(lastUpdated, from: Date()))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
             }
-
             Spacer()
-
             if model.page == .accounts {
-                BarButton(title: "Add", systemImage: "plus") { model.page = .addAccount }
-                BarButton(title: "Settings", systemImage: "gearshape") { model.page = .settings }
+                Button("Add Account…") { model.page = .addAccount }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 12))
             }
-
-            Button {
+            IconButton(systemImage: "power", help: "Quit vibecom") {
                 NSApplication.shared.terminate(nil)
-            } label: {
-                Image(systemName: "power")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color(brand.muted))
             }
-            .buttonStyle(.plain)
-            .help("Quit vibecom bar")
         }
-        .environment(\.brand, brand)
     }
 }
 
