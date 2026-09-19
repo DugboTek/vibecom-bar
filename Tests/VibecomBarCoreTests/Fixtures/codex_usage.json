@@ -1,7 +1,1 @@
-{"user_id":"user-AAAA","account_id":"3e2d996c-de48-4a66-957b-ed8f1293c63d","email":"builder@example.com","plan_type":"pro",
- "rate_limit":{"allowed":true,"limit_reached":false,
-  "primary_window":{"used_percent":99,"limit_window_seconds":604800,"reset_after_seconds":535260,"reset_at":1790362999},
-  "secondary_window":{"used_percent":12.5,"limit_window_seconds":18000,"reset_after_seconds":9000,"reset_at":1789836739}},
- "code_review_rate_limit":null,
- "additional_rate_limits":[{"limit_name":"gpt-reserve","metered_feature":"base_model_inference",
-  "rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":0,"limit_window_seconds":604800,"reset_after_seconds":604800,"reset_at":1790432539},"secondary_window":null}}]}
+{"user_id": "user-AAAA", "account_id": "3e2d996c-de48-4a66-957b-ed8f1293c63d", "email": "builder@example.com", "plan_type": "pro", "rate_limit": {"allowed": true, "limit_reached": false, "primary_window": {"used_percent": 99, "limit_window_seconds": 604800, "reset_after_seconds": 535260, "reset_at": 1790362999}, "secondary_window": {"used_percent": 12.5, "limit_window_seconds": 18000, "reset_after_seconds": 9000, "reset_at": 1789836739}}, "code_review_rate_limit": null, "additional_rate_limits": [{"limit_name": "gpt-reserve", "metered_feature": "base_model_inference", "rate_limit": {"allowed": true, "limit_reached": false, "primary_window": {"used_percent": 0, "limit_window_seconds": 604800, "reset_after_seconds": 604800, "reset_at": 1790432539}, "secondary_window": null}}], "rate_limit_reset_credits": {"available_count": 2, "applicable_available_count": 0}}

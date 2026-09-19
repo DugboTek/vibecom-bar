@@ -297,14 +297,14 @@ struct AccountImportTests {
     }
 
     @Test("explains itself when nobody is signed in to capture")
-    func failsWhenNoLoginPresent() async {
+    func failsWhenNoLoginPresent() {
         let importer = AccountImporter(
             environment: CLIEnvironment(
                 secrets: MemorySecretStore(), files: MemoryFileStore(),
                 claudeConfigFile: URL(fileURLWithPath: "/home/.claude.json"),
                 codexAuthFile: URL(fileURLWithPath: "/home/.codex/auth.json")))
 
-        await #expect(throws: ImportError.noActiveLogin(.claude)) {
+        #expect(throws: ImportError.noActiveLogin(.claude)) {
             try importer.captureActiveClaudeLogin()
         }
     }

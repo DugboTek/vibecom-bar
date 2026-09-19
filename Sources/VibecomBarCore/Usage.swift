@@ -46,6 +46,26 @@ public struct UsageWindow: Equatable, Sendable, Identifiable {
     public var isExhausted: Bool { lockedReason != nil || usedFraction >= 1 }
 }
 
+/// Codex lets an account spend a credit to reset a spent limit early.
+public struct ResetCredits: Equatable, Sendable {
+    public let available: Int
+    /// How many can be spent right now; a reset only applies once a limit is hit.
+    public let usableNow: Int
+
+    public init(available: Int, usableNow: Int) {
+        self.available = available
+        self.usableNow = usableNow
+    }
+
+    public var summary: String {
+        switch available {
+        case 0: "No resets"
+        case 1: "1 reset"
+        default: "\(available) resets"
+        }
+    }
+}
+
 public struct UsageSnapshot: Equatable, Sendable {
     public let provider: Provider
     public let windows: [UsageWindow]
@@ -53,11 +73,13 @@ public struct UsageSnapshot: Equatable, Sendable {
     public let email: String?
     public let accountID: String?
     public let fetchedAt: Date
+    public let resetCredits: ResetCredits?
 
     public init(
         provider: Provider, windows: [UsageWindow], plan: String?, email: String?,
-        accountID: String?, fetchedAt: Date
+        accountID: String?, fetchedAt: Date, resetCredits: ResetCredits? = nil
     ) {
+        self.resetCredits = resetCredits
         self.provider = provider
         self.windows = windows
         self.plan = plan
@@ -78,18 +100,81 @@ public enum UsageParseError: Error, Equatable {
 
 enum ISO8601 {
     static func date(from string: String) -> Date? {
+        if let date = fastDate(from: string) { return date }
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = fractional.date(from: string) { return date }
         return ISO8601DateFormatter().date(from: string)
     }
+
+    /// `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)`, parsed by hand. Foundation's
+    /// formatter clones an ICU formatter behind a global lock on every call,
+    /// which serialised the transcript scan across every core.
+    static func fastDate(from string: String) -> Date? {
+        var utf8 = string.utf8[...]
+        func digits(_ count: Int) -> Int? {
+            guard utf8.count >= count else { return nil }
+            var value = 0
+            for _ in 0..<count {
+                let byte = utf8.removeFirst()
+                guard byte >= 48, byte <= 57 else { return nil }
+                value = value * 10 + Int(byte - 48)
+            }
+            return value
+        }
+        func expect(_ character: UInt8) -> Bool {
+            guard utf8.first == character else { return false }
+            utf8.removeFirst()
+            return true
+        }
+
+        guard let year = digits(4), expect(45), let month = digits(2), expect(45), let day = digits(2),
+            expect(84), let hour = digits(2), expect(58), let minute = digits(2), expect(58),
+            let second = digits(2),
+            (1...12).contains(month), (1...31).contains(day), hour < 24, minute < 60, second < 61
+        else { return nil }
+
+        var fraction = 0.0
+        if expect(46) {
+            var scale = 0.1
+            var sawDigit = false
+            while let byte = utf8.first, byte >= 48, byte <= 57 {
+                fraction += Double(byte - 48) * scale
+                scale /= 10
+                sawDigit = true
+                utf8.removeFirst()
+            }
+            guard sawDigit else { return nil }
+        }
+
+        var offset = 0
+        if expect(90) {
+            offset = 0
+        } else if let sign = utf8.first, sign == 43 || sign == 45 {
+            utf8.removeFirst()
+            guard let hours = digits(2), expect(58), let minutes = digits(2) else { return nil }
+            offset = (hours * 3600 + minutes * 60) * (sign == 45 ? -1 : 1)
+        } else {
+            return nil
+        }
+        guard utf8.isEmpty else { return nil }
+
+        // Days since 1970-01-01 in the proleptic Gregorian calendar (Hinnant's algorithm).
+        let y = month <= 2 ? year - 1 : year
+        let era = (y >= 0 ? y : y - 399) / 400
+        let yearOfEra = y - era * 400
+        let dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1
+        let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+        let days = era * 146_097 + dayOfEra - 719_468
+
+        let seconds = days * 86_400 + hour * 3600 + minute * 60 + second - offset
+        return Date(timeIntervalSince1970: Double(seconds) + fraction)
+    }
 }
 
-/// A utilization number is a fraction on some plans and a percentage on others,
-/// so anything above 1 is read as a percentage. Both scales agree below 1%.
-func normalizedFraction(_ raw: Double) -> Double {
-    let value = raw > 1 ? raw / 100 : raw
-    return min(max(value, 0), 1)
+/// Both providers report usage as a percentage, 0...100.
+func fraction(fromPercent percent: Double) -> Double {
+    min(max(percent / 100, 0), 1)
 }
 
 public enum ClaudeUsageParser {
@@ -111,7 +196,44 @@ public enum ClaudeUsageParser {
             throw UsageParseError.malformed(message)
         }
 
-        let windows: [UsageWindow] = known.compactMap { entry in
+        let fromList = (root["limits"] as? [[String: Any]])?.compactMap(window(fromLimit:)) ?? []
+        let windows = fromList.isEmpty ? legacyWindows(root) : fromList
+
+        return UsageSnapshot(
+            provider: .claude, windows: windows, plan: nil, email: nil, accountID: nil, fetchedAt: fetchedAt)
+    }
+
+    /// The `limits` list is what Claude Code's own /usage screen renders, and it
+    /// names model-scoped weekly limits (such as Fable) that have no fixed key.
+    private static func window(fromLimit limit: [String: Any]) -> UsageWindow? {
+        guard let kind = limit["kind"] as? String, let percent = limit["percent"] as? Double else {
+            return nil
+        }
+        let scope = limit["scope"] as? [String: Any]
+        let model = (scope?["model"] as? [String: Any])?["display_name"] as? String
+        let resetsAt = (limit["resets_at"] as? String).flatMap(ISO8601.date(from:))
+        let locked = (limit["severity"] as? String).flatMap { $0 == "exceeded" || $0 == "blocked" ? $0 : nil }
+
+        let label: String
+        let windowKind: UsageWindow.Kind
+        switch kind {
+        case "session":
+            (label, windowKind) = ("5-hour session", .session)
+        case "weekly_all":
+            (label, windowKind) = ("Weekly (all models)", .weekly)
+        case "weekly_scoped":
+            (label, windowKind) = ("Weekly (\(model ?? "model"))", .weeklyModel)
+        default:
+            return nil
+        }
+
+        return UsageWindow(
+            id: model.map { "\(kind):\($0)" } ?? kind, label: label, kind: windowKind,
+            usedFraction: fraction(fromPercent: percent), resetsAt: resetsAt, lockedReason: locked)
+    }
+
+    private static func legacyWindows(_ root: [String: Any]) -> [UsageWindow] {
+        known.compactMap { entry in
             guard let raw = root[entry.id] as? [String: Any],
                 let utilization = raw["utilization"] as? Double
             else { return nil }
@@ -119,20 +241,11 @@ public enum ClaudeUsageParser {
                 id: entry.id,
                 label: entry.label,
                 kind: entry.kind,
-                usedFraction: normalizedFraction(utilization),
+                usedFraction: fraction(fromPercent: utilization),
                 resetsAt: (raw["resets_at"] as? String).flatMap(ISO8601.date(from:)),
                 lockedReason: raw["locked_reason"] as? String
             )
         }
-
-        return UsageSnapshot(
-            provider: .claude,
-            windows: windows,
-            plan: nil,
-            email: nil,
-            accountID: nil,
-            fetchedAt: fetchedAt
-        )
     }
 }
 
@@ -157,8 +270,17 @@ public enum CodexUsageParser {
             plan: root["plan_type"] as? String,
             email: root["email"] as? String,
             accountID: root["account_id"] as? String,
-            fetchedAt: fetchedAt
+            fetchedAt: fetchedAt,
+            resetCredits: resetCredits(from: root["rate_limit_reset_credits"])
         )
+    }
+
+    private static func resetCredits(from raw: Any?) -> ResetCredits? {
+        guard let raw = raw as? [String: Any], let available = raw["available_count"] as? Int else {
+            return nil
+        }
+        return ResetCredits(
+            available: available, usableNow: raw["applicable_available_count"] as? Int ?? 0)
     }
 
     private static func window(from raw: Any?, id: String) -> UsageWindow? {
@@ -172,7 +294,7 @@ public enum CodexUsageParser {
             id: id,
             label: Self.label(forWindowOf: seconds),
             kind: seconds >= 86_400 ? .weekly : .session,
-            usedFraction: normalizedFraction(percent / 100),
+            usedFraction: fraction(fromPercent: percent),
             resetsAt: resetsAt,
             lockedReason: (raw["limit_reached"] as? Bool == true) ? "limit_reached" : nil
         )

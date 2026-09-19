@@ -42,6 +42,43 @@ public enum UsageFormatter {
         return "\(countdown(to: date, from: now)) · \(formatter.string(from: date))"
     }
 
+    /// One line per account: when it is usable again if it is spent,
+    /// otherwise when its most pressing limit resets.
+    public static func resetLine(for status: AccountStatus, now: Date) -> String? {
+        let windows = status.snapshot?.windows ?? []
+
+        let spent = windows.filter(\.isExhausted).compactMap(\.resetsAt)
+        if let back = spent.max() {
+            return "Out of usage · back in \(countdown(to: back, from: now))"
+        }
+
+        guard let headline = status.headline, let resetsAt = headline.resetsAt else { return nil }
+        return "\(headline.label) resets in \(countdown(to: resetsAt, from: now))"
+    }
+
+    /// 512, 940K, 18.2M, 1.2B — short enough for the menu bar.
+    public static func tokens(_ count: Int) -> String {
+        func oneDecimal(_ value: Double, _ suffix: String) -> String {
+            let rounded = (value * 10).rounded() / 10
+            return rounded == rounded.rounded()
+                ? "\(Int(rounded))\(suffix)" : String(format: "%.1f%@", rounded, suffix)
+        }
+        switch count {
+        case ..<1_000: return "\(count)"
+        case ..<1_000_000: return "\(Int((Double(count) / 1_000).rounded()))K"
+        case ..<1_000_000_000: return oneDecimal(Double(count) / 1_000_000, "M")
+        default: return oneDecimal(Double(count) / 1_000_000_000, "B")
+        }
+    }
+
+    public static func dollars(_ amount: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.locale = Locale(identifier: "en_US")
+        return formatter.string(from: NSNumber(value: amount)) ?? "$0.00"
+    }
+
     public static func relative(_ date: Date, from now: Date) -> String {
         let seconds = Int(now.timeIntervalSince(date))
         switch seconds {

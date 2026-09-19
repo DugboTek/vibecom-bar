@@ -6,7 +6,7 @@ import Testing
 @Suite("Monitoring accounts")
 struct AccountMonitorTests {
     static let now = Date(timeIntervalSince1970: 1_789_830_000)
-    static let usageJSON = #"{"five_hour":{"utilization":0.25,"resets_at":null},"seven_day":{"utilization":0.8,"resets_at":null}}"#
+    static let usageJSON = #"{"five_hour":{"utilization":25,"resets_at":null},"seven_day":{"utilization":80,"resets_at":null}}"#
     static let refreshJSON = #"{"access_token":"at-fresh","refresh_token":"rt-fresh","expires_in":28800}"#
 
     private func fixture(

@@ -141,7 +141,7 @@ struct LiveIntegrationTests {
             print("  \(window.label): \(UsageFormatter.percent(window.usedFraction)) · resets \(resets)")
         }
         #expect(!snapshot.windows.isEmpty)
-        #expect(snapshot.windows.contains { $0.id == "five_hour" })
+        #expect(snapshot.windows.contains { $0.kind == .session })
     }
 }
 
@@ -187,5 +187,25 @@ struct LiveRenewalTests {
         let snapshot = try await UsageService().fetchUsage(codex: live, now: Date())
         #expect(!snapshot.windows.isEmpty)
         print("codex after renewal: \(snapshot.email ?? "?") \(snapshot.windows.map { "\($0.label) \(UsageFormatter.percent($0.usedFraction))" }.joined(separator: ", "))")
+    }
+}
+
+@Suite("Live token ledger", .enabled(if: ProcessInfo.processInfo.environment["VIBECOM_LIVE"] == "1"))
+struct LiveTokenLedgerTests {
+    @Test("reads this Mac's real transcripts quickly enough to run on a timer")
+    func readsRealTranscripts() async {
+        let ledger = TokenLedger()
+        let clock = ContinuousClock()
+
+        var summary = TokenSummary()
+        let first = await clock.measure { summary = await ledger.update() }
+        let second = await clock.measure { summary = await ledger.update() }
+
+        print("ledger first scan \(first), incremental \(second)")
+        print("today \(UsageFormatter.tokens(summary.today.tokens)) \(UsageFormatter.dollars(summary.today.cost)) · week \(UsageFormatter.tokens(summary.week.tokens)) \(UsageFormatter.dollars(summary.week.cost)) · \(summary.tokensPerMinute)/min")
+        for model in summary.topModels.prefix(4) {
+            print("  \(model.model): \(UsageFormatter.tokens(model.totals.tokens))")
+        }
+        #expect(second < .seconds(2))
     }
 }

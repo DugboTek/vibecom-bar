@@ -125,7 +125,7 @@ struct UsageRequestTests {
         _ = try await service.fetchUsage(
             claude: ClaudeCredentials(accessToken: "at-1", scopes: ["user:profile"]), now: .distantPast)
 
-        let request = try #require(await http.sent.first)
+        let request = try #require(http.sent.first)
         #expect(request.url?.absoluteString == "https://api.anthropic.com/api/oauth/usage")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer at-1")
         #expect(request.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
@@ -141,7 +141,7 @@ struct UsageRequestTests {
                 idToken: "", accessToken: "at-2", refreshToken: "rt", accountID: "acct-9"),
             now: .distantPast)
 
-        let request = try #require(await http.sent.first)
+        let request = try #require(http.sent.first)
         #expect(request.url?.absoluteString == "https://chatgpt.com/backend-api/wham/usage")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer at-2")
         #expect(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "acct-9")
