@@ -1,0 +1,6 @@
+{"five_hour":{"utilization":0.42,"resets_at":"2026-09-19T19:20:00.689272+00:00","limit_dollars":null,"used_dollars":null,"remaining_dollars":null,"locked_reason":null},
+ "seven_day":{"utilization":0.7,"resets_at":"2026-09-26T03:00:00.689294+00:00","limit_dollars":null,"used_dollars":null,"remaining_dollars":null,"locked_reason":null},
+ "seven_day_opus":{"utilization":0.15,"resets_at":"2026-09-26T03:00:00.689294+00:00","limit_dollars":null,"used_dollars":null,"remaining_dollars":null,"locked_reason":null},
+ "seven_day_oauth_apps":null,"seven_day_sonnet":null,"seven_day_cowork":null,"seven_day_omelette":null,
+ "tangelo":null,"iguana_necktie":null,"omelette_promotional":null,
+ "nimbus_quill":{"utilization":0.0,"resets_at":null,"limit_dollars":null,"used_dollars":null,"remaining_dollars":null,"locked_reason":null}}
