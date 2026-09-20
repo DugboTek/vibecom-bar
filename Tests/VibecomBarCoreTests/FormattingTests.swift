@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -12,6 +13,14 @@ struct FormattingTests {
         #expect(UsageFormatter.percent(0.426) == "43%")
         #expect(UsageFormatter.percent(0) == "0%")
         #expect(UsageFormatter.percent(1) == "100%")
+    }
+
+    @Test("the longest percentage fits its compact column on one line")
+    func percentColumnFits() {
+        let text = UsageFormatter.percent(1) as NSString
+        let width = text.size(withAttributes: [.font: NSFont.systemFont(ofSize: 10, weight: .medium)]).width
+
+        #expect(width <= UsageFormatter.percentColumnWidth)
     }
 
     @Test("never rounds a nearly spent window down to a comfortable number")

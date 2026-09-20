@@ -55,13 +55,13 @@ private struct AccountRow: View {
             UsageRing(fraction: status.headline?.usedFraction, isActive: status.isActive)
                 .padding(.top, 1)
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 3) {
                 titleRow
                 subtitle
                 if let error = status.error, error == .needsLogin || error == .cannotReadUsage {
                     signInPrompt(error)
                 }
-                VStack(spacing: 4) {
+                VStack(spacing: 2) {
                     ForEach(status.snapshot?.windows ?? []) { window in
                         WindowRow(window: window)
                     }
@@ -69,7 +69,7 @@ private struct AccountRow: View {
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.vertical, 7)
         .background(Color.primary.opacity(isHovering ? 0.03 : 0))
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -97,7 +97,7 @@ private struct AccountRow: View {
                 AccountIdentityText(
                     value: status.account.label,
                     isBlurred: model.preferences.blurAccountNames)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
             }
 
             Spacer(minLength: 4)
@@ -195,24 +195,26 @@ private struct WindowRow: View {
     let window: UsageWindow
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 6) {
             Text(window.label)
-                .font(.system(size: 11))
+                .font(.system(size: 10))
                 .foregroundStyle(.secondary)
-                .frame(width: 105, alignment: .leading)
+                .frame(width: 96, alignment: .leading)
                 .lineLimit(1)
 
             UsageBar(fraction: window.usedFraction)
 
             Text(UsageFormatter.percent(window.usedFraction))
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .monospacedDigit()
                 .foregroundStyle(
                     window.usedFraction >= 0.8
                         ? Style.usageColor(window.usedFraction, accent: Color(brand.accent))
                         : .primary
                 )
-                .frame(width: 32, alignment: .trailing)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(width: UsageFormatter.percentColumnWidth, alignment: .trailing)
 
             Group {
                 if let resetsAt = window.resetsAt {
@@ -222,10 +224,10 @@ private struct WindowRow: View {
                     Text("—")
                 }
             }
-            .font(.system(size: 11))
+            .font(.system(size: 10))
             .monospacedDigit()
             .foregroundStyle(.tertiary)
-            .frame(width: 42, alignment: .trailing)
+            .frame(width: 38, alignment: .trailing)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
