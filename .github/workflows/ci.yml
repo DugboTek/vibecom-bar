@@ -12,7 +12,7 @@ jobs:
   test:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Run offline test suite
         run: swift test
       - name: Build release binary
