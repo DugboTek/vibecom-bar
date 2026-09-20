@@ -40,7 +40,8 @@ limit rises to the top, with its reset time shown beside it.
 ### Switch when it makes sense
 
 Choose the account you want Claude Code or Codex to use next. Nothing changes
-until you ask.
+until you ask. Or turn on Auto Swap to move at 99% to the available account
+whose next reset is soonest.
 
 ### Follow your work as it happens
 
