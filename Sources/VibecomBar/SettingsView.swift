@@ -31,6 +31,39 @@ struct SettingsView: View {
                 }
             }
 
+            group("Auto Swap") {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Switch accounts at 99%")
+                            .font(.system(size: 12))
+                        Text("Uses the available account whose next reset is soonest.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle("Switch accounts at 99%", isOn: $model.preferences.autoSwapEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+
+                if model.preferences.autoSwapEnabled {
+                    Divider().padding(.leading, 12)
+                    HStack(spacing: 5) {
+                        Image(systemName: model.autoSwapActivity == nil ? "eye" : "checkmark.circle.fill")
+                        Text(model.autoSwapActivity ?? "Watching Claude Code and Codex.")
+                            .lineLimit(2)
+                    }
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                }
+            }
+
             group("Privacy") {
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {

@@ -55,7 +55,8 @@ repeating prompt is not expected; follow the
 
 You now have one menu bar view for account limits and local token activity.
 Use **Settings → Privacy → Blur account names** whenever you are sharing your
-screen or taking screenshots. You can also configure alerts and refresh timing
-from the gear button.
+screen or taking screenshots. Turn on **Settings → Auto Swap** if you want
+Vibecom Bar to switch at 99% to the available account whose next reset is
+soonest. You can also configure alerts and refresh timing from the gear button.
 
 Next, read [how credentials and privacy work](security-model.md).

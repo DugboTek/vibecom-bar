@@ -30,12 +30,18 @@ final class AppModel {
     private(set) var ticker = TokenTicker(duration: 5)
     /// Public leaderboard standing for the user signed in through the Vibecom CLI.
     private(set) var vibecomStanding: VibecomStanding?
+    /// Human-readable result of the most recent automatic account decision.
+    private(set) var autoSwapActivity: String?
     var page: Page = .accounts
 
     var preferences: Preferences {
         didSet {
             guard preferences != oldValue else { return }
             try? preferencesStore.save(preferences)
+            if !preferences.autoSwapEnabled {
+                autoSwapAttemptedActiveIDs.removeAll()
+                autoSwapActivity = nil
+            }
             restartTimer()
         }
     }
@@ -57,6 +63,9 @@ final class AppModel {
     static let tokenInterval: Duration = .seconds(5)
     private var signInTask: Task<Void, Never>?
     private var notificationsAuthorized = false
+    /// Prevents a failed keychain write from being retried every refresh while
+    /// the same nearly-spent account remains active.
+    private var autoSwapAttemptedActiveIDs: [Provider: UUID] = [:]
 
     init() {
         let support = FileManager.default
@@ -199,15 +208,55 @@ final class AppModel {
         async let refreshedStanding = fetchVibecomStanding()
         let previous = statuses
         let current = await monitor.refreshAll()
-        statuses = current
+        let final = await autoSwapIfNeeded(current)
+        statuses = final
         if let refreshedStanding = await refreshedStanding {
             vibecomStanding = refreshedStanding
         }
         lastUpdated = Date()
 
         let alerts = NotificationPlanner(preferences: preferences)
-            .notifications(previous: previous, current: current, now: Date())
+            .notifications(previous: previous, current: final, now: Date())
         for alert in alerts { post(alert) }
+    }
+
+    private func autoSwapIfNeeded(_ current: [AccountStatus]) async -> [AccountStatus] {
+        guard preferences.autoSwapEnabled else { return current }
+
+        // A changed or recovered active account opens a fresh decision cycle.
+        for provider in Provider.allCases {
+            guard let active = current.first(where: {
+                $0.account.provider == provider && $0.isActive
+            }) else {
+                autoSwapAttemptedActiveIDs.removeValue(forKey: provider)
+                continue
+            }
+            let isNearLimit = active.snapshot?.windows.contains {
+                $0.isExhausted || $0.usedFraction >= 0.99
+            } ?? false
+            if autoSwapAttemptedActiveIDs[provider] != active.id || !isNearLimit {
+                autoSwapAttemptedActiveIDs.removeValue(forKey: provider)
+            }
+        }
+
+        var switched = false
+        for decision in AutoSwapPlanner.decisions(in: current) {
+            guard autoSwapAttemptedActiveIDs[decision.provider] != decision.from.id else { continue }
+            autoSwapAttemptedActiveIDs[decision.provider] = decision.from.id
+            do {
+                try await activator.activate(decision.to)
+                switched = true
+                autoSwapActivity =
+                    "Switched (decision.provider.displayName) to the account resetting soonest."
+            } catch {
+                autoSwapActivity =
+                    "Couldn't switch (decision.provider.displayName): (error.localizedDescription)"
+            }
+        }
+
+        // Re-read once so the Active badge and menu-bar title immediately
+        // reflect successful switches without recursively applying the policy.
+        return switched ? await monitor.refreshAll() : current
     }
 
     private func fetchVibecomStanding() async -> VibecomStanding? {
