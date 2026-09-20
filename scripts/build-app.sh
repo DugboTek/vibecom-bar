@@ -10,7 +10,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 APP="$ROOT/Vibecom Bar.app"
-ICON_SOURCE="${VIBECOM_ICON:-$HOME/Desktop/DEV/vibeland/src/app/icon.png}"
+ICON_SOURCE="${VIBECOM_ICON:-$ROOT/Resources/AppIcon.png}"
+VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
+BUILD_NUMBER="${VIBECOM_BUILD_NUMBER:-1}"
 
 echo "› Building release binary"
 swift build -c release --product VibecomBar
@@ -20,7 +22,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$ROOT/.build/release/VibecomBar" "$APP/Contents/MacOS/VibecomBar"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -30,12 +32,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>VibecomBar</string>
   <key>CFBundleIdentifier</key><string>build.vibecom.bar</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
-  <key>NSHumanReadableCopyright</key><string>vibecom.build</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 DugboTek</string>
 </dict>
 </plist>
 PLIST
@@ -64,7 +67,11 @@ fi
 
 if [[ -n "$IDENTITY" ]]; then
   echo "› Signing as $IDENTITY"
-  codesign --force --options runtime --timestamp=none --sign "$IDENTITY" "$APP"
+  if [[ "$IDENTITY" == Developer\ ID\ Application:* ]]; then
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+  else
+    codesign --force --options runtime --timestamp=none --sign "$IDENTITY" "$APP"
+  fi
 else
   echo "› No signing certificate found; signing ad-hoc."
   echo "  macOS will ask for keychain access again after every rebuild."
