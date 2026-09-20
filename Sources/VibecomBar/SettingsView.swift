@@ -6,7 +6,7 @@ struct SettingsView: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             group("Menu Bar") {
                 row("Show") {
                     Picker("Show", selection: $model.preferences.menuBarStyle) {
@@ -29,6 +29,25 @@ struct SettingsView: View {
                     .pickerStyle(.menu)
                     .fixedSize()
                 }
+            }
+
+            group("Privacy") {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Blur account names")
+                            .font(.system(size: 12))
+                        Text("Keeps emails private in the popover and screenshots.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle("Blur account names", isOn: $model.preferences.blurAccountNames)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
 
             group("Notifications") {
@@ -66,7 +85,7 @@ struct SettingsView: View {
             control()
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .padding(.vertical, 6)
     }
 
     private func toggle(_ title: String, isOn: Binding<Bool>) -> some View {

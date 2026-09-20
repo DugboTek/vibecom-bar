@@ -35,6 +35,13 @@ enum Style {
 
     static let cardBackground = Color(nsColor: .controlBackgroundColor).opacity(0.7)
     static let hairline = Color(nsColor: .separatorColor)
+    static let claude = Color(red: 0.84, green: 0.39, blue: 0.24)
+    static let codex = Color(red: 0.16, green: 0.64, blue: 0.48)
+}
+
+enum Motion {
+    static let feedback = Animation.timingCurve(0.25, 1, 0.5, 1, duration: 0.14)
+    static let state = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.24)
 }
 
 struct Wordmark: View {
@@ -76,6 +83,62 @@ struct Card<Content: View>: View {
     }
 }
 
+/// Small, friendly provider marks drawn in SwiftUI so they stay crisp at menu-bar scale.
+struct ProviderMark: View {
+    let provider: Provider
+    var size: CGFloat = 18
+
+    private var tint: Color { provider == .claude ? Style.claude : Style.codex }
+
+    var body: some View {
+        ZStack {
+            Circle().fill(tint.opacity(0.12))
+            if provider == .claude {
+                ZStack {
+                    ForEach(0..<6, id: \.self) { index in
+                        Capsule(style: .continuous)
+                            .fill(tint)
+                            .frame(width: max(1.4, size * 0.09), height: size * 0.34)
+                            .offset(y: -size * 0.19)
+                            .rotationEffect(.degrees(Double(index) * 60))
+                    }
+                    Circle().fill(tint).frame(width: size * 0.16, height: size * 0.16)
+                }
+                .frame(width: size * 0.72, height: size * 0.72)
+            } else {
+                ZStack {
+                    ForEach(0..<3, id: \.self) { index in
+                        RoundedRectangle(cornerRadius: size * 0.16, style: .continuous)
+                            .stroke(tint, lineWidth: max(1.2, size * 0.075))
+                            .frame(width: size * 0.39, height: size * 0.62)
+                            .rotationEffect(.degrees(Double(index) * 60))
+                    }
+                }
+                .frame(width: size * 0.72, height: size * 0.72)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+struct AccountIdentityText: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let value: String
+    let isBlurred: Bool
+
+    var body: some View {
+        Text(value)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .blur(radius: isBlurred ? 5 : 0)
+            .opacity(isBlurred ? 0.62 : 1)
+            .privacySensitive(isBlurred)
+            .animation(reduceMotion ? nil : Motion.state, value: isBlurred)
+            .accessibilityLabel(isBlurred ? "Hidden account name" : value)
+    }
+}
+
 struct SectionTitle: View {
     let text: String
     var trailing: String?
@@ -98,6 +161,7 @@ struct SectionTitle: View {
 
 struct UsageBar: View {
     @Environment(\.brand) private var brand
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let fraction: Double
 
     var body: some View {
@@ -110,7 +174,7 @@ struct UsageBar: View {
             }
         }
         .frame(height: 4)
-        .animation(.easeOut(duration: 0.3), value: fraction)
+        .animation(reduceMotion ? nil : Motion.state, value: fraction)
         .accessibilityHidden(true)
     }
 }
@@ -118,6 +182,7 @@ struct UsageBar: View {
 /// A capacity ring, in the manner of the Battery widget.
 struct UsageRing: View {
     @Environment(\.brand) private var brand
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let fraction: Double?
     var isActive = false
 
@@ -140,7 +205,7 @@ struct UsageRing: View {
             }
         }
         .frame(width: 22, height: 22)
-        .animation(.easeOut(duration: 0.3), value: fraction)
+        .animation(reduceMotion ? nil : Motion.state, value: fraction)
     }
 }
 
@@ -149,6 +214,7 @@ struct Sparkline: View {
     @Environment(\.brand) private var brand
     let values: [Int]
     let currentHour: Int
+    var height: CGFloat = 24
 
     var body: some View {
         let peak = max(values.max() ?? 0, 1)
@@ -160,11 +226,11 @@ struct Sparkline: View {
                             ? Color(brand.accent)
                             : Color(brand.accent).opacity(hour > currentHour ? 0.12 : 0.45)
                     )
-                    .frame(height: max(2, 30 * CGFloat(value) / CGFloat(peak)))
+                    .frame(height: max(2, height * CGFloat(value) / CGFloat(peak)))
                     .help("\(hour):00 — \(UsageFormatter.tokens(value)) tokens")
             }
         }
-        .frame(height: 30, alignment: .bottom)
+        .frame(height: height, alignment: .bottom)
         .accessibilityLabel("Tokens by hour today")
     }
 }
@@ -188,6 +254,7 @@ struct Pill: View {
 }
 
 struct IconButton: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let systemImage: String
     let help: String
     let action: () -> Void
@@ -203,10 +270,17 @@ struct IconButton: View {
                         .fill(Color.primary.opacity(isHovering ? 0.08 : 0))
                 )
                 .contentShape(Rectangle())
+                .scaleEffect(isHovering ? 1.04 : 1)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .onHover { isHovering = $0 }
+        .onHover { hovering in
+            if reduceMotion {
+                isHovering = hovering
+            } else {
+                withAnimation(Motion.feedback) { isHovering = hovering }
+            }
+        }
         .help(help)
         .accessibilityLabel(help)
     }

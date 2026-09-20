@@ -11,7 +11,7 @@ struct TokensCard: View {
 
     var body: some View {
         Card {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 if let summary {
                     header(summary)
                     Sparkline(
@@ -22,7 +22,7 @@ struct TokensCard: View {
                     counting
                 }
             }
-            .padding(12)
+            .padding(10)
         }
     }
 
@@ -37,8 +37,13 @@ struct TokensCard: View {
                     LiveBadge(rate: summary.tokensPerMinute)
                 }
             }
-            TickerNumber(ticker: ticker)
-            Text("tokens · \(UsageFormatter.tokens(summary.today.tokens)) · \(UsageFormatter.dollars(summary.today.cost)) at API prices")
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                TickerNumber(ticker: ticker)
+                Text("tokens")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Text("\(UsageFormatter.dollars(summary.today.cost)) at API prices")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .help(
@@ -49,15 +54,15 @@ struct TokensCard: View {
 
     private func split(_ summary: TokenSummary) -> some View {
         let total = max(summary.today.tokens, 1)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 10) {
                 ForEach(CodingTool.allCases) { tool in
                     let tokens = summary.byTool[tool]?.tokens ?? 0
                     HStack(spacing: 4) {
                         Circle()
                             .fill(tool == .claudeCode ? Color(brand.accent) : Color(brand.signal))
                             .frame(width: 6, height: 6)
-                        Text(tool.displayName)
+                        Text(tool == .claudeCode ? "Claude" : "Codex")
                             .foregroundStyle(.secondary)
                         Text(UsageFormatter.tokens(tokens))
                             .monospacedDigit()
@@ -121,7 +126,7 @@ private struct TickerNumber: View {
         TimelineView(.periodic(from: .now, by: 1.0 / 12)) { context in
             let value = ticker.value(at: context.date)
             Text(UsageFormatter.fullTokens(value))
-                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .font(.system(size: 23, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .contentTransition(.numericText(value: Double(value)))
                 .animation(.snappy(duration: 0.18), value: value)
@@ -134,6 +139,7 @@ private struct TickerNumber: View {
 
 private struct LiveBadge: View {
     @Environment(\.brand) private var brand
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let rate: Int
     @State private var pulse = false
 
@@ -142,10 +148,12 @@ private struct LiveBadge: View {
             Circle()
                 .fill(Color(brand.signal))
                 .frame(width: 6, height: 6)
-                .scaleEffect(pulse ? 1 : 0.6)
-                .opacity(pulse ? 1 : 0.5)
-                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-                .onAppear { pulse = true }
+                .scaleEffect(reduceMotion ? 1 : (pulse ? 1 : 0.6))
+                .opacity(reduceMotion ? 1 : (pulse ? 1 : 0.5))
+                .animation(
+                    reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                    value: pulse)
+                .onAppear { if !reduceMotion { pulse = true } }
             Text("\(UsageFormatter.tokens(rate))/min")
                 .font(.system(size: 11, weight: .medium))
                 .monospacedDigit()

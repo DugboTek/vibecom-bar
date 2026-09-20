@@ -54,5 +54,8 @@ repeating prompt is not expected; follow the
 ## What you built
 
 You now have one menu bar view for account limits and local token activity.
-Next, read [how credentials and privacy work](security-model.md) or configure
-alerts and refresh timing from the gear button.
+Use **Settings → Privacy → Blur account names** whenever you are sharing your
+screen or taking screenshots. You can also configure alerts and refresh timing
+from the gear button.
+
+Next, read [how credentials and privacy work](security-model.md).

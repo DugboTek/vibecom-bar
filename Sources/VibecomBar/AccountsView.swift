@@ -5,20 +5,28 @@ struct AccountsView: View {
     let model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             TokensCard(summary: model.tokens, ticker: model.ticker, isCounting: model.isCountingTokens)
 
             if model.hasAccounts {
                 ForEach(Provider.allCases) { provider in
                     let statuses = model.statuses(for: provider)
                     if !statuses.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            SectionTitle(
-                                text: provider.displayName,
-                                trailing: statuses.count == 1 ? "1 account" : "\(statuses.count) accounts")
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 6) {
+                                ProviderMark(provider: provider, size: 17)
+                                Text(provider.displayName)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text("\(statuses.count)")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 3)
                             Card {
                                 ForEach(Array(statuses.enumerated()), id: \.element.id) { index, status in
-                                    if index > 0 { Divider().padding(.leading, 44) }
+                                    if index > 0 { Divider().padding(.leading, 40) }
                                     AccountRow(status: status, model: model)
                                 }
                             }
@@ -34,6 +42,7 @@ struct AccountsView: View {
 
 private struct AccountRow: View {
     @Environment(\.brand) private var brand
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let status: AccountStatus
     let model: AppModel
 
@@ -42,28 +51,34 @@ private struct AccountRow: View {
     @State private var draftName = ""
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 9) {
             UsageRing(fraction: status.headline?.usedFraction, isActive: status.isActive)
                 .padding(.top, 1)
 
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 5) {
                 titleRow
                 subtitle
                 if let error = status.error, error == .needsLogin || error == .cannotReadUsage {
                     signInPrompt(error)
                 }
-                VStack(spacing: 5) {
+                VStack(spacing: 4) {
                     ForEach(status.snapshot?.windows ?? []) { window in
                         WindowRow(window: window)
                     }
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(Color.primary.opacity(isHovering ? 0.03 : 0))
         .contentShape(Rectangle())
-        .onHover { isHovering = $0 }
+        .onHover { hovering in
+            if reduceMotion {
+                isHovering = hovering
+            } else {
+                withAnimation(Motion.feedback) { isHovering = hovering }
+            }
+        }
         .contextMenu { menu }
     }
 
@@ -79,10 +94,10 @@ private struct AccountRow: View {
                     }
                     .onExitCommand { isRenaming = false }
             } else {
-                Text(status.account.label)
+                AccountIdentityText(
+                    value: status.account.label,
+                    isBlurred: model.preferences.blurAccountNames)
                     .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
             }
 
             Spacer(minLength: 4)
@@ -96,13 +111,16 @@ private struct AccountRow: View {
             }
 
             if status.isActive {
-                Text("In use")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Circle().fill(Color(brand.signal)).frame(width: 5, height: 5)
+                    Text("Active")
+                }
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
             } else {
                 Button("Use") { Task { await model.activate(status) } }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11, weight: .semibold))
                     .help("Make this the account \(status.account.provider.displayName) uses next")
             }
         }
@@ -177,11 +195,11 @@ private struct WindowRow: View {
     let window: UsageWindow
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             Text(window.label)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-                .frame(width: 118, alignment: .leading)
+                .frame(width: 105, alignment: .leading)
                 .lineLimit(1)
 
             UsageBar(fraction: window.usedFraction)
@@ -194,7 +212,7 @@ private struct WindowRow: View {
                         ? Style.usageColor(window.usedFraction, accent: Color(brand.accent))
                         : .primary
                 )
-                .frame(width: 34, alignment: .trailing)
+                .frame(width: 32, alignment: .trailing)
 
             Group {
                 if let resetsAt = window.resetsAt {
@@ -207,7 +225,7 @@ private struct WindowRow: View {
             .font(.system(size: 11))
             .monospacedDigit()
             .foregroundStyle(.tertiary)
-            .frame(width: 44, alignment: .trailing)
+            .frame(width: 42, alignment: .trailing)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(

@@ -22,21 +22,22 @@ struct VibecomBarApp: App {
 
 struct RootView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: AppModel
 
     /// A scroll view has no height of its own, and a menu bar window sizes to
     /// its content, so the page is measured and the scroll view given that height.
     @State private var contentHeight: CGFloat = 120
-    static let maxContentHeight: CGFloat = 560
+    static let maxContentHeight: CGFloat = 520
 
     private var brand: BrandPalette { colorScheme == .dark ? .dark : .light }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
-                .padding(.bottom, 10)
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
 
             ScrollView {
                 Group {
@@ -46,8 +47,10 @@ struct RootView: View {
                     case .settings: SettingsView(model: model)
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 4)
+                .id(model.page)
+                .transition(pageTransition)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 2)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(
                     GeometryReader { proxy in
@@ -60,14 +63,15 @@ struct RootView: View {
                 if height > 0 { contentHeight = height }
             }
 
-            Divider().padding(.top, 8)
+            Divider().padding(.top, 6)
             footer
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
         }
-        .frame(width: 372)
+        .frame(width: 356)
         .tint(Color(brand.accent))
         .environment(\.brand, brand)
+        .animation(reduceMotion ? nil : Motion.state, value: model.page)
     }
 
     private var header: some View {
@@ -77,7 +81,7 @@ struct RootView: View {
             } else {
                 Button {
                     model.cancelSignIn()
-                    model.page = .accounts
+                    navigate(to: .accounts)
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
@@ -99,7 +103,7 @@ struct RootView: View {
                 }
             }
             if model.page == .accounts {
-                IconButton(systemImage: "gearshape", help: "Settings") { model.page = .settings }
+                IconButton(systemImage: "gearshape", help: "Settings") { navigate(to: .settings) }
             }
         }
     }
@@ -113,13 +117,30 @@ struct RootView: View {
             }
             Spacer()
             if model.page == .accounts {
-                Button("Add Account…") { model.page = .addAccount }
+                Button { navigate(to: .addAccount) } label: {
+                    Label("Add", systemImage: "plus")
+                }
                     .buttonStyle(.borderless)
                     .font(.system(size: 12))
             }
             IconButton(systemImage: "power", help: "Quit vibecom") {
                 NSApplication.shared.terminate(nil)
             }
+        }
+    }
+
+    private var pageTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .move(edge: .trailing)),
+            removal: .opacity.combined(with: .move(edge: .leading)))
+    }
+
+    private func navigate(to page: AppModel.Page) {
+        if reduceMotion {
+            model.page = page
+        } else {
+            withAnimation(Motion.state) { model.page = page }
         }
     }
 }
