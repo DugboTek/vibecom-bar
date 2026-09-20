@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a focused improvement to Vibecom Bar
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Vibecom Bar. Please describe the workflow, not only the control you want added.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What gets in your way?
+      description: Tell us what you are trying to accomplish and where the current flow breaks down.
+      placeholder: When I manage three Claude accounts, I cannot…
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would a good outcome look like?
+      description: Describe what you expect to see or be able to do.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Accounts and switching
+        - Usage and reset windows
+        - Local token activity
+        - Alerts and menu behavior
+        - Installation and updates
+        - Accessibility or appearance
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried?
+      description: Workarounds, scripts, or other tools are useful context.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Credential safety
+      options:
+        - label: I did not include access tokens, refresh tokens, passwords, or private Keychain output.
+          required: true
