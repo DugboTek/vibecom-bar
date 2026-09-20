@@ -9,11 +9,13 @@ final class MemorySecretStore: SecretStore, @unchecked Sendable {
     private let lock = NSLock()
     private var items: [String: Data]
     private var readLog: [String] = []
+    private var writeLog: [String] = []
 
     init(_ seed: [String: Data] = [:]) { items = seed }
 
     /// Every keychain read can cost the user a password prompt, so tests count them.
     func reads(of service: String) -> Int { lock.withLock { readLog.filter { $0 == service }.count } }
+    func writes(of service: String) -> Int { lock.withLock { writeLog.filter { $0 == service }.count } }
     func reads(withPrefix prefix: String) -> Int { lock.withLock { readLog.filter { $0.hasPrefix(prefix) }.count } }
 
     func read(service: String) throws -> Data? {
@@ -22,7 +24,12 @@ final class MemorySecretStore: SecretStore, @unchecked Sendable {
             return items[service]
         }
     }
-    func write(_ data: Data, service: String) throws { lock.withLock { items[service] = data } }
+    func write(_ data: Data, service: String) throws {
+        lock.withLock {
+            writeLog.append(service)
+            items[service] = data
+        }
+    }
     func replaceExisting(_ data: Data, service: String) throws {
         try lock.withLock {
             guard items[service] != nil else { throw VaultError.missingExternalSecret }

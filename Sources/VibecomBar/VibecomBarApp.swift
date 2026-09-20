@@ -3,29 +3,20 @@ import VibecomBarCore
 
 @main
 struct VibecomBarApp: App {
-    @State private var model = AppModel()
+    @NSApplicationDelegateAdaptor(StatusItemController.self) private var controller
 
     init() {
+        // Clears a stuck "item removed" flag left by the earlier SwiftUI
+        // menu bar scene, so the icon appears for anyone upgrading.
+        MenuBarVisibility.restore()
+        ExitTrace.install()
         Snapshot.runIfRequested()
     }
 
     var body: some Scene {
-        MenuBarExtra {
-            RootView(model: model)
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "cloud.fill")
-                let text = model.menuBarText
-                if !text.isEmpty {
-                    Text(text).font(.system(size: 11, weight: .medium)).monospacedDigit()
-                }
-            }
-            .onAppear {
-                // A snapshot run renders sample accounts and must never read the keychain.
-                if !Snapshot.isRequested { model.start() }
-            }
-        }
-        .menuBarExtraStyle(.window)
+        // The menu bar item is created by the delegate; this scene exists only
+        // because an App needs one, and never opens a window.
+        Settings { EmptyView() }
     }
 }
 

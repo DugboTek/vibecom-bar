@@ -174,7 +174,15 @@ the keychain (`--tokens` adds this Mac's real token count):
 | `Pricing.swift` | list prices, mirrored from vibecom's `pricing.ts` and its tests |
 | `TokenLedger.swift` | incremental, parallel transcript reading; today / week / hourly / live totals |
 
-`VibecomBar` is the SwiftUI menu bar app on top of it.
+`VibecomBar` is the menu bar app on top of it. The item itself is an AppKit
+`NSStatusItem` rather than SwiftUI's `MenuBarExtra`: that scene is ended by
+macOS whenever it decides the item should not be shown, which quits the app. On
+this machine that state stuck, and the app died a second into every launch —
+looking like a crash, and leaving a trail of half-finished sign-in prompts.
+
+Diagnostics are opt-in: set `VIBECOM_KEYCHAIN_TRACE` to a file path to record
+every keychain call (each one can cost the user a password prompt) and a
+backtrace of whatever ends the process.
 
 ## Limits worth knowing
 

@@ -12,6 +12,8 @@ public struct KeychainSecretStore: SecretStore {
     public init() {}
 
     public func read(service: String) throws -> Data? {
+        Diagnostics.trace("read-begin \(service)")
+        defer { Diagnostics.trace("read-end \(service)") }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -28,6 +30,7 @@ public struct KeychainSecretStore: SecretStore {
     }
 
     public func write(_ data: Data, service: String) throws {
+        Diagnostics.trace("write \(service)")
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -61,6 +64,7 @@ public struct KeychainSecretStore: SecretStore {
     }
 
     public func delete(service: String) throws {
+        Diagnostics.trace("delete \(service)")
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -80,6 +84,7 @@ public struct KeychainSecretStore: SecretStore {
     }
 
     public func services(withPrefix prefix: String) throws -> [String] {
+        Diagnostics.trace("list \(prefix)")
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecReturnAttributes as String: true,
