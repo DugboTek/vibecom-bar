@@ -90,11 +90,12 @@ pick up the switch.
 
 ## Keeping tokens alive
 
-Saved logins age out, so vibecom bar renews them in the background using each
-provider's refresh token, and saves what it gets back. When the renewed account
-is the one a CLI is signed in as, the renewed token is written through to the
-CLI as well — otherwise the CLI would be left holding a token that was rotated
-away, and you would be signed out for no reason.
+Saved inactive logins age out, so vibecom bar renews them in the background
+using each provider's refresh token and saves what it gets back. It never
+renews the Claude login currently in use. Claude refresh tokens rotate, and a
+failed write back to Claude Code's keychain after rotation would sign the CLI
+out. Recapture the active Claude account when vibecom says its saved login has
+expired. Codex uses a normal file, so its active login can be renewed safely.
 
 When a refresh token is dead for real, the account says **Sign in again** and
 offers the guided sign-in.

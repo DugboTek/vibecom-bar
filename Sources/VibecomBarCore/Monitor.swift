@@ -39,9 +39,10 @@ public struct AccountStatus: Equatable, Sendable, Identifiable {
     public var headline: UsageWindow? { snapshot?.headline }
 }
 
-/// Keeps every stored account's usage current: renews tokens as they age,
-/// hands a renewed token to the CLI when it belongs to the signed-in account,
-/// and holds on to the last good reading when a provider is unreachable.
+/// Keeps every stored account's usage current and holds on to the last good
+/// reading when a provider is unreachable. An active Claude login is never
+/// renewed here: Claude refresh tokens rotate, and rotating one before a
+/// keychain write succeeds would sign Claude Code out.
 public actor AccountMonitor {
     private let vault: AccountVault
     private let activator: AccountActivator
@@ -91,7 +92,8 @@ public actor AccountMonitor {
     private func refresh(_ account: StoredAccount, isActive: Bool) async -> AccountStatus {
         do {
             let secret = try await vault.secret(for: account.id)
-            let usable = try await renewIfNeeded(secret, for: account, force: false)
+            let usable = try await renewIfNeeded(
+                secret, for: account, force: false, isActive: isActive)
             do {
                 let snapshot = try await fetch(usable, provider: account.provider)
                 lastGood[account.id] = snapshot
@@ -100,7 +102,8 @@ public actor AccountMonitor {
                     account: named, snapshot: snapshot, error: nil, isActive: isActive)
             } catch UsageError.unauthorized {
                 // The provider disagreed about the token's life; renew once and retry.
-                let renewed = try await renewIfNeeded(usable, for: account, force: true)
+                let renewed = try await renewIfNeeded(
+                    usable, for: account, force: true, isActive: isActive)
                 let snapshot = try await fetch(renewed, provider: account.provider)
                 lastGood[account.id] = snapshot
                 return AccountStatus(
@@ -127,8 +130,10 @@ public actor AccountMonitor {
     /// Renews an account's token even though it has not expired, for the
     /// "renew now" action and for proving the renewal path works.
     public func renewCredentials(for account: StoredAccount) async throws {
+        let isActive =
+            ((try? await activator.activeAccountID(for: account.provider)) ?? nil) == account.id
         let secret = try await vault.secret(for: account.id)
-        _ = try await renewIfNeeded(secret, for: account, force: true)
+        _ = try await renewIfNeeded(secret, for: account, force: true, isActive: isActive)
     }
 
     private func fetch(_ secret: AccountSecret, provider: Provider) async throws -> UsageSnapshot {
@@ -138,18 +143,23 @@ public actor AccountMonitor {
         }
     }
 
-    private func renewIfNeeded(_ secret: AccountSecret, for account: StoredAccount, force: Bool) async throws
-        -> AccountSecret
+    private func renewIfNeeded(
+        _ secret: AccountSecret, for account: StoredAccount, force: Bool, isActive: Bool
+    ) async throws -> AccountSecret
     {
         switch secret {
         case .claude(let credentials):
             guard force || credentials.isExpired(at: now()) else { return secret }
+            // Never rotate the refresh token Claude Code is currently using.
+            // If writing the replacement to its keychain is denied, the old
+            // token is already dead and Claude immediately becomes logged out.
+            guard !isActive else { throw AccountError.needsLogin }
             guard let refreshToken = credentials.refreshToken else { throw AccountError.needsLogin }
             let (data, response) = try await http.send(
                 OAuthRefresher.claudeRequest(refreshToken: refreshToken))
             try Self.checkRefreshResponse(response)
             let renewed = try OAuthRefresher.apply(claudeResponse: data, to: credentials, now: now())
-            try await store(.claude(renewed), for: account)
+            try await vault.update(secret: .claude(renewed), for: account.id)
             return .claude(renewed)
 
         case .codex(let credentials):
@@ -158,18 +168,14 @@ public actor AccountMonitor {
                 OAuthRefresher.codexRequest(refreshToken: credentials.refreshToken))
             try Self.checkRefreshResponse(response)
             let renewed = try OAuthRefresher.apply(codexResponse: data, to: credentials, now: now())
-            try await store(.codex(renewed), for: account)
+            try await vault.update(secret: .codex(renewed), for: account.id)
+            if isActive {
+                // Codex stores credentials in a normal file, so this cannot
+                // produce a keychain prompt.
+                try await activator.activate(account)
+            }
             return .codex(renewed)
         }
-    }
-
-    /// Saves renewed credentials, and keeps the CLI in step when this account is
-    /// the signed-in one — otherwise the CLI would hold a rotated-away token.
-    private func store(_ secret: AccountSecret, for account: StoredAccount) async throws {
-        let wasActive = ((try? await activator.activeAccountID(for: account.provider)) ?? nil) == account.id
-        try await vault.update(secret: secret, for: account.id)
-        guard wasActive else { return }
-        try? await activator.activate(account)
     }
 
     private static func checkRefreshResponse(_ response: HTTPURLResponse) throws {

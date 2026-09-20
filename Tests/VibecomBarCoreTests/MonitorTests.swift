@@ -94,20 +94,22 @@ struct AccountMonitorTests {
         #expect(stored.refreshToken == "rt-fresh")
     }
 
-    @Test("hands the renewed token to the CLI when that account is the signed-in one")
-    func writesRotatedCredentialsToLiveLogin() async throws {
+    @Test("never rotates the refresh token Claude Code is actively using")
+    func doesNotRotateActiveClaudeLogin() async throws {
         let live = ClaudeCredentialTests.keychainJSON(accessToken: "at-stale")
-        let (monitor, vault, secrets, _, _) = fixture(
+        let (monitor, vault, secrets, _, http) = fixture(
             responses: [(Data(Self.refreshJSON.utf8), 200), (Data(Self.usageJSON.utf8), 200)],
             liveKeychain: live, signedIn: "one@example.com")
         let account = try await vault.add(
             provider: .claude, identity: AccountIdentity(email: "one@example.com"),
             secret: .claude(expiredClaude()))
 
-        _ = await monitor.refresh(account)
+        let status = await monitor.refresh(account)
 
         let written = try #require(secrets.contents(of: ClaudeKeychain.service))
-        #expect(try ClaudeCredentials(keychainJSON: written).accessToken == "at-fresh")
+        #expect(try ClaudeCredentials(keychainJSON: written).accessToken == "at-stale")
+        #expect(status.error == .needsLogin)
+        #expect(http.sent.isEmpty)
     }
 
     @Test("leaves another account's login alone when renewing a background account")

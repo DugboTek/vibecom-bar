@@ -279,11 +279,18 @@ final class AppModel {
             switch provider {
             case .claude:
                 let after = try KeychainSecretStore().services(withPrefix: "Claude Code-credentials")
-                if let service = ClaudeKeychain.newService(before: keychainBefore, after: after),
-                    let captured = try? importer.captureClaudeLogin(
-                        keychainService: service, configDir: profile)
-                {
-                    return captured
+                if let service = ClaudeKeychain.newService(before: keychainBefore, after: after) {
+                    do {
+                        return try importer.captureClaudeLogin(
+                            keychainService: service, configDir: profile)
+                    } catch ImportError.noActiveLogin {
+                        // Claude can create the item just before its contents
+                        // are complete. Retry only that transient condition.
+                    } catch {
+                        // A denied keychain read must stop. Swallowing it here
+                        // used to ask again every two seconds for ten minutes.
+                        throw error
+                    }
                 }
             case .codex:
                 if let captured = try? importer.captureCodexLogin(fromCodexHome: profile) {
