@@ -142,6 +142,26 @@ final class AppModel {
             status(.codex, "main@example.com", "pro", active: true, [window("p", "Weekly", .weekly, 0.22, 164)], resets: ResetCredits(available: 1, usableNow: 0)),
             status(.codex, "side@example.com", "pro", active: false, [window("p", "Weekly", .weekly, 1, 26)], resets: ResetCredits(available: 2, usableNow: 1)),
         ]
+
+        var claude = TokenTotals()
+        claude.tokens = 84_902_117
+        claude.cost = 76.42
+        var codex = TokenTotals()
+        codex.tokens = 37_541_804
+        codex.cost = 31.18
+        var preview = TokenSummary()
+        preview.today.tokens = claude.tokens + codex.tokens
+        preview.today.cost = claude.cost + codex.cost
+        preview.week.tokens = 611_804_291
+        preview.week.cost = 528.37
+        preview.byTool = [.claudeCode: claude, .codex: codex]
+        preview.hourly = [0, 0, 0, 0, 0, 0, 400_000, 1_300_000, 3_100_000, 7_800_000,
+                          11_200_000, 16_400_000, 22_100_000, 18_700_000, 14_200_000, 9_500_000,
+                          8_100_000, 4_900_000, 2_700_000, 1_100_000, 0, 0, 0, 0]
+        preview.tokensPerMinute = 18_420
+        preview.lastActivity = now
+        tokens = preview
+        ticker.receive(preview.today.tokens, at: now)
         lastUpdated = now
     }
 
