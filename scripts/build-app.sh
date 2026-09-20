@@ -13,6 +13,7 @@ APP="$ROOT/Vibecom Bar.app"
 ICON_SOURCE="${VIBECOM_ICON:-$ROOT/Resources/AppIcon.png}"
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 BUILD_NUMBER="${VIBECOM_BUILD_NUMBER:-1}"
+BUNDLE_ID="build.vibecom.menubar"
 
 echo "› Building release binary"
 swift build -c release --product VibecomBar
@@ -30,7 +31,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Vibecom Bar</string>
   <key>CFBundleDisplayName</key><string>vibecom bar</string>
   <key>CFBundleExecutable</key><string>VibecomBar</string>
-  <key>CFBundleIdentifier</key><string>build.vibecom.bar</string>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
@@ -42,6 +43,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+ACTUAL_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Contents/Info.plist")
+if [[ "$ACTUAL_BUNDLE_ID" != "$BUNDLE_ID" ]]; then
+  echo "✗ Bundle identity mismatch: expected $BUNDLE_ID, got $ACTUAL_BUNDLE_ID"
+  exit 1
+fi
 
 if [[ -f "$ICON_SOURCE" ]]; then
   echo "› Rendering icon from $ICON_SOURCE"

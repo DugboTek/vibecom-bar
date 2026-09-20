@@ -10,8 +10,21 @@ public struct Preferences: Codable, Equatable, Sendable {
     public var notifyOnReset: Bool = true
     public var showInactiveAccounts: Bool = true
     public var launchAtLogin: Bool = false
+    public var blurAccountNames: Bool = false
 
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        storedRefreshInterval = try values.decodeIfPresent(TimeInterval.self, forKey: .storedRefreshInterval) ?? 300
+        menuBarStyle = try values.decodeIfPresent(MenuBarStyle.self, forKey: .menuBarStyle) ?? .activeAccounts
+        alertThresholds = try values.decodeIfPresent([Double].self, forKey: .alertThresholds) ?? [0.8, 0.95]
+        notifyOnReset = try values.decodeIfPresent(Bool.self, forKey: .notifyOnReset) ?? true
+        showInactiveAccounts = try values.decodeIfPresent(Bool.self, forKey: .showInactiveAccounts) ?? true
+        launchAtLogin = try values.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
+        blurAccountNames = try values.decodeIfPresent(Bool.self, forKey: .blurAccountNames) ?? false
+        refreshInterval = storedRefreshInterval
+    }
 
     /// Clamped on the way in: polling faster than a minute buys nothing and
     /// risks the rate limiting this app exists to avoid.
@@ -25,7 +38,8 @@ public struct Preferences: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case storedRefreshInterval = "refreshInterval"
-        case menuBarStyle, alertThresholds, notifyOnReset, showInactiveAccounts, launchAtLogin
+        case menuBarStyle, alertThresholds, notifyOnReset, showInactiveAccounts, launchAtLogin,
+            blurAccountNames
     }
 }
 

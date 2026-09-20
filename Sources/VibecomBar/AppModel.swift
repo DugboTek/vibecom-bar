@@ -28,6 +28,8 @@ final class AppModel {
     private(set) var isCountingTokens = false
     /// Glides today's count between readings so it reads like a live ticker.
     private(set) var ticker = TokenTicker(duration: 5)
+    /// Public leaderboard standing for the user signed in through the Vibecom CLI.
+    private(set) var vibecomStanding: VibecomStanding?
     var page: Page = .accounts
 
     var preferences: Preferences {
@@ -45,6 +47,8 @@ final class AppModel {
     private let preferencesStore: PreferencesStore
     private let environment: CLIEnvironment
     private let support: URL
+    private let vibecomProfile: VibecomProfile?
+    private let vibecomStandingService: VibecomStandingService
 
     private var timerTask: Task<Void, Never>?
     private var tokenTask: Task<Void, Never>?
@@ -63,6 +67,17 @@ final class AppModel {
         let files = DiskFileStore()
         let environment = CLIEnvironment.live(files: files)
         self.environment = environment
+        let configRoot = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".config", isDirectory: true)
+        let vibecomData =
+            (try? files.read(
+                configRoot
+                    .appendingPathComponent("vibecom", isDirectory: true)
+                    .appendingPathComponent("credentials.json"))) ?? nil
+        vibecomProfile = vibecomData.flatMap(VibecomProfile.parse)
+        vibecomStandingService = VibecomStandingService()
         vault = AccountVault(secrets: KeychainSecretStore(), files: files, directory: support)
         activator = AccountActivator(vault: vault, environment: environment)
         monitor = AccountMonitor(vault: vault, activator: activator, environment: environment)
@@ -162,6 +177,15 @@ final class AppModel {
         preview.lastActivity = now
         tokens = preview
         ticker.receive(preview.today.tokens, at: now)
+        vibecomStanding = VibecomStanding(
+            username: "sola",
+            displayName: "Sola",
+            rank: VibecomStanding.Rank(
+                level: 8, name: "Staff Vibe Engineer", label: "Staff Engineer",
+                progress: 0.42, nextName: "Context Maxxer I", tokensToNext: 12_900_000),
+            weekly: VibecomStanding.Period(position: 12, tokens: 42_800_000),
+            allTime: VibecomStanding.Period(position: 4, tokens: 611_800_000),
+            streakDays: 9)
         lastUpdated = now
     }
 
@@ -172,14 +196,23 @@ final class AppModel {
         isRefreshing = true
         defer { isRefreshing = false }
 
+        async let refreshedStanding = fetchVibecomStanding()
         let previous = statuses
         let current = await monitor.refreshAll()
         statuses = current
+        if let refreshedStanding = await refreshedStanding {
+            vibecomStanding = refreshedStanding
+        }
         lastUpdated = Date()
 
         let alerts = NotificationPlanner(preferences: preferences)
             .notifications(previous: previous, current: current, now: Date())
         for alert in alerts { post(alert) }
+    }
+
+    private func fetchVibecomStanding() async -> VibecomStanding? {
+        guard let vibecomProfile else { return nil }
+        return try? await vibecomStandingService.fetch(vibecomProfile)
     }
 
     var menuBarText: String {

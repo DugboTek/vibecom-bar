@@ -13,6 +13,7 @@ struct PreferencesTests {
         #expect(preferences.menuBarStyle == .activeAccounts)
         #expect(preferences.alertThresholds == [0.8, 0.95])
         #expect(preferences.notifyOnReset)
+        #expect(!preferences.blurAccountNames)
     }
 
     @Test("remembers settings across launches")
@@ -22,12 +23,36 @@ struct PreferencesTests {
         var preferences = Preferences()
         preferences.refreshInterval = 60
         preferences.menuBarStyle = .highestUsage
+        preferences.blurAccountNames = true
 
         try PreferencesStore(files: files, url: url).save(preferences)
 
         let loaded = PreferencesStore(files: files, url: url).load()
         #expect(loaded.refreshInterval == 60)
         #expect(loaded.menuBarStyle == .highestUsage)
+        #expect(loaded.blurAccountNames)
+    }
+
+    @Test("keeps existing preferences when privacy setting is introduced")
+    func decodesLegacyPreferences() throws {
+        let data = Data(
+            """
+            {
+              "refreshInterval": 120,
+              "menuBarStyle": "iconOnly",
+              "alertThresholds": [0.95],
+              "notifyOnReset": false,
+              "showInactiveAccounts": false,
+              "launchAtLogin": true
+            }
+            """.utf8)
+
+        let preferences = try JSONDecoder().decode(Preferences.self, from: data)
+
+        #expect(preferences.refreshInterval == 120)
+        #expect(preferences.menuBarStyle == .iconOnly)
+        #expect(preferences.launchAtLogin)
+        #expect(!preferences.blurAccountNames)
     }
 
     @Test("falls back to defaults when the settings file is damaged")

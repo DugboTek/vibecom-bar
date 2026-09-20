@@ -181,3 +181,45 @@ struct UsageRequestTests {
         #expect(await http.sent.isEmpty)
     }
 }
+
+@Suite("Vibecom standing")
+struct VibecomStandingTests {
+    @Test("reads only the public identity from the CLI credential file")
+    func parsesProfileWithoutKeepingToken() throws {
+        let profile = VibecomProfile.parse(
+            Data(#"{"username":"sola","origin":"https://www.vibecom.build","token":"secret"}"#.utf8))
+
+        #expect(profile == VibecomProfile(username: "sola", origin: "https://www.vibecom.build"))
+    }
+
+    @Test("fetches the signed-in builder's public standing without authorization")
+    func fetchesStanding() async throws {
+        let http = StubHTTPClient(json: Self.response)
+        let standing = try await VibecomStandingService(http: http).fetch(
+            VibecomProfile(username: "sola+work", origin: "https://www.vibecom.build"))
+
+        #expect(standing.rank.label == "Staff Engineer")
+        #expect(standing.weekly.position == 12)
+        #expect(standing.allTime.position == 4)
+        let request = try #require(http.sent.first)
+        #expect(
+            request.url?.absoluteString
+                == "https://www.vibecom.build/api/app/summary?username=sola+work")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    @Test("refuses to send a username to an unsafe origin")
+    func rejectsUnsafeOrigin() async {
+        let http = StubHTTPClient(json: Self.response)
+
+        await #expect(throws: VibecomStandingError.unsafeOrigin) {
+            try await VibecomStandingService(http: http).fetch(
+                VibecomProfile(username: "sola", origin: "http://example.com"))
+        }
+        #expect(http.sent.isEmpty)
+    }
+
+    private static let response = #"""
+        {"builder":{"username":"sola","displayName":"Sola","rank":{"level":8,"name":"Staff Vibe Engineer","label":"Staff Engineer","progress":0.42,"nextName":"Context Maxxer I","tokensToNext":1234},"weekly":{"position":12,"tokens":4500000},"allTime":{"position":4,"tokens":21000000},"streakDays":9}}
+        """#
+}

@@ -215,3 +215,117 @@ public enum ClaudeProfileParser {
             plan: organization?["organization_type"] as? String)
     }
 }
+
+// MARK: - Vibecom standing
+
+/// The non-secret portion of the Vibecom CLI login file.
+public struct VibecomProfile: Decodable, Equatable, Sendable {
+    public let username: String
+    public let origin: String
+
+    public init(username: String, origin: String) {
+        self.username = username
+        self.origin = origin
+    }
+
+    public static func parse(_ data: Data) -> VibecomProfile? {
+        try? JSONDecoder().decode(VibecomProfile.self, from: data)
+    }
+}
+
+public struct VibecomStanding: Decodable, Equatable, Sendable {
+    public struct Rank: Decodable, Equatable, Sendable {
+        public let level: Int
+        public let name: String
+        public let label: String
+        public let progress: Double
+        public let nextName: String?
+        public let tokensToNext: Int
+
+        public init(
+            level: Int, name: String, label: String, progress: Double, nextName: String?,
+            tokensToNext: Int
+        ) {
+            self.level = level
+            self.name = name
+            self.label = label
+            self.progress = progress
+            self.nextName = nextName
+            self.tokensToNext = tokensToNext
+        }
+    }
+
+    public struct Period: Decodable, Equatable, Sendable {
+        public let position: Int?
+        public let tokens: Int
+
+        public init(position: Int?, tokens: Int) {
+            self.position = position
+            self.tokens = tokens
+        }
+    }
+
+    public let username: String
+    public let displayName: String?
+    public let rank: Rank
+    public let weekly: Period
+    public let allTime: Period
+    public let streakDays: Int
+
+    public init(
+        username: String, displayName: String?, rank: Rank, weekly: Period, allTime: Period,
+        streakDays: Int
+    ) {
+        self.username = username
+        self.displayName = displayName
+        self.rank = rank
+        self.weekly = weekly
+        self.allTime = allTime
+        self.streakDays = streakDays
+    }
+}
+
+public enum VibecomStandingError: Error, Equatable {
+    case unsafeOrigin
+    case unavailable(Int)
+    case malformed
+}
+
+public struct VibecomStandingService: Sendable {
+    private struct Response: Decodable { let builder: VibecomStanding }
+    private let http: HTTPClient
+
+    public init(http: HTTPClient = LiveHTTPClient()) {
+        self.http = http
+    }
+
+    public func fetch(_ profile: VibecomProfile) async throws -> VibecomStanding {
+        guard let url = summaryURL(for: profile) else { throw VibecomStandingError.unsafeOrigin }
+        var request = URLRequest(url: url)
+        request.setValue(UsageService.userAgent, forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await http.send(request)
+        guard response.statusCode == 200 else {
+            throw VibecomStandingError.unavailable(response.statusCode)
+        }
+        guard let payload = try? JSONDecoder().decode(Response.self, from: data) else {
+            throw VibecomStandingError.malformed
+        }
+        return payload.builder
+    }
+
+    private func summaryURL(for profile: VibecomProfile) -> URL? {
+        guard var components = URLComponents(string: profile.origin),
+            let scheme = components.scheme?.lowercased(),
+            let host = components.host?.lowercased(),
+            components.user == nil, components.password == nil,
+            components.query == nil, components.fragment == nil,
+            components.path.isEmpty || components.path == "/",
+            scheme == "https" || (scheme == "http" && (host == "localhost" || host == "127.0.0.1"))
+        else { return nil }
+
+        components.path = "/api/app/summary"
+        components.queryItems = [URLQueryItem(name: "username", value: profile.username)]
+        return components.url
+    }
+}

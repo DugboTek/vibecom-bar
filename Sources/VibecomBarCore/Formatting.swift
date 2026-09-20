@@ -1,6 +1,9 @@
 import Foundation
 
 public enum UsageFormatter {
+    /// Wide enough for the longest value ("100%") at the compact row font.
+    public static let percentColumnWidth = 38.0
+
     /// Rounds toward the honest side: a window that has any usage never shows
     /// 0%, and one with anything left never shows 100%.
     public static func percent(_ fraction: Double) -> String {

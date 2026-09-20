@@ -54,6 +54,10 @@ and Codex. It extracts timestamps, model identifiers, and numeric usage fields.
 It does not retain prompts, responses, tool output, or file contents. The
 resulting totals stay in memory and are not uploaded.
 
+For screen sharing, **Settings → Privacy → Blur account names** obscures account
+labels throughout the popover. The preference changes presentation only; it
+does not alter the account metadata stored on disk.
+
 ## Network access
 
 The app contacts only Anthropic and OpenAI/ChatGPT endpoints needed for usage,
