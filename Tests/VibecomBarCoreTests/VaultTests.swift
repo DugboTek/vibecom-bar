@@ -23,6 +23,12 @@ final class MemorySecretStore: SecretStore, @unchecked Sendable {
         }
     }
     func write(_ data: Data, service: String) throws { lock.withLock { items[service] = data } }
+    func replaceExisting(_ data: Data, service: String) throws {
+        try lock.withLock {
+            guard items[service] != nil else { throw VaultError.missingExternalSecret }
+            items[service] = data
+        }
+    }
     func delete(service: String) throws { lock.withLock { items[service] = nil } }
     func services(withPrefix prefix: String) throws -> [String] {
         lock.withLock { items.keys.filter { $0.hasPrefix(prefix) }.sorted() }
@@ -199,6 +205,24 @@ struct ActivationTests {
 
         let written = try #require(secrets.contents(of: ClaudeKeychain.service))
         #expect(try ClaudeCredentials(keychainJSON: written).accessToken == "at-other")
+    }
+
+    @Test("never creates Claude Code's live keychain item")
+    func doesNotCreateClaudeKeychainItem() async throws {
+        let secrets = MemorySecretStore()
+        let files = MemoryFileStore(["/home/.claude.json": Self.liveProfile])
+        let vault = makeVault(secrets: secrets, files: files)
+        let account = try await vault.add(
+            provider: .claude,
+            identity: AccountIdentity(email: "other@example.com", accountUUID: "uuid-other"),
+            secret: .claude(ClaudeCredentials(accessToken: "at-other", refreshToken: "rt-other")))
+        let activator = AccountActivator(
+            vault: vault, environment: environment(secrets: secrets, files: files))
+
+        await #expect(throws: VaultError.missingExternalSecret) {
+            try await activator.activate(account)
+        }
+        #expect(secrets.contents(of: ClaudeKeychain.service) == nil)
     }
 
     @Test("leaves the MCP server logins in place when switching")

@@ -48,6 +48,18 @@ public struct KeychainSecretStore: SecretStore {
         guard status == errSecSuccess else { throw StoreError.keychain(status) }
     }
 
+    /// Changes only the secret bytes. In particular, it does not relabel an
+    /// external app's item or create one whose ACL would belong to Vibecom.
+    public func replaceExisting(_ data: Data, service: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        let attributes: [String: Any] = [kSecValueData as String: data]
+        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        guard status == errSecSuccess else { throw StoreError.keychain(status) }
+    }
+
     public func delete(service: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

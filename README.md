@@ -80,6 +80,9 @@ Switching writes the chosen account's credentials where the CLI looks for them:
 the `Claude Code-credentials` keychain item, or `~/.codex/auth.json`. It is
 careful about what it touches:
 
+- Claude Code must create its own live keychain item first. vibecom bar only
+  updates an existing item's secret bytes; it never creates or relabels that
+  item, so Claude remains trusted to read it without prompts.
 - MCP server logins live in the same keychain item and are preserved.
 - `~/.claude.json` keeps every other setting; only the signed-in account changes.
 - The first overwrite of each store is backed up (`auth.json.vibecom-backup`,

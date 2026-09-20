@@ -5,6 +5,9 @@ import Foundation
 public protocol SecretStore: Sendable {
     func read(service: String) throws -> Data?
     func write(_ data: Data, service: String) throws
+    /// Replaces an existing item without creating it or changing its ownership
+    /// metadata. Used for credential stores owned by another application.
+    func replaceExisting(_ data: Data, service: String) throws
     func delete(service: String) throws
     func services(withPrefix prefix: String) throws -> [String]
     /// Deletes only if it can be done without asking the user; otherwise leaves
@@ -13,6 +16,10 @@ public protocol SecretStore: Sendable {
 }
 
 extension SecretStore {
+    public func replaceExisting(_ data: Data, service: String) throws {
+        guard try read(service: service) != nil else { throw VaultError.missingExternalSecret }
+        try write(data, service: service)
+    }
     public func deleteIfSilent(service: String) { try? delete(service: service) }
 }
 
@@ -69,6 +76,7 @@ public struct StoredAccount: Codable, Equatable, Sendable, Identifiable {
 public enum VaultError: Error, Equatable {
     case unknownAccount(UUID)
     case missingSecret(UUID)
+    case missingExternalSecret
 }
 
 /// Account metadata lives in a plain file; tokens only ever live in the keychain.
@@ -291,9 +299,13 @@ public struct AccountActivator: Sendable {
         switch try await vault.secret(for: account.id) {
         case .claude(let credentials):
             try backUpClaudeKeychainOnce()
-            let existing = try environment.secrets.read(service: ClaudeKeychain.service)
+            guard let existing = try environment.secrets.read(service: ClaudeKeychain.service) else {
+                // Claude must create its own live item. If Vibecom creates it,
+                // macOS trusts only Vibecom and Claude Code prompts forever.
+                throw VaultError.missingExternalSecret
+            }
             let merged = try ClaudeCredentials.merge(credentials, intoKeychainJSON: existing)
-            try environment.secrets.write(merged, service: ClaudeKeychain.service)
+            try environment.secrets.replaceExisting(merged, service: ClaudeKeychain.service)
 
             let profile = try environment.files.read(environment.claudeConfigFile)
             let updated = try ClaudeProfileFile.apply(account.identity, toJSON: profile)
