@@ -44,8 +44,9 @@ until you ask.
 
 ### Follow your work as it happens
 
-See today's tokens, your live token rate, seven-day activity, and estimated
-API value across both tools.
+See today's tokens, your live token rate, and estimated API value across both
+tools. If you use Vibecom, your builder rank, weekly standing, all-time
+standing, streak, and progress to the next rank appear alongside them.
 
 ## Install
 
