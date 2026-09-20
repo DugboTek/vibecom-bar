@@ -150,9 +150,9 @@ public actor AccountMonitor {
         switch secret {
         case .claude(let credentials):
             guard force || credentials.isExpired(at: now()) else { return secret }
-            // Never rotate the refresh token Claude Code is currently using.
-            // If writing the replacement to its keychain is denied, the old
-            // token is already dead and Claude immediately becomes logged out.
+            // Never touch the live Claude keychain item from a periodic
+            // refresh. Even a read can display a password dialog, and retrying
+            // it on a timer creates a prompt storm.
             guard !isActive else { throw AccountError.needsLogin }
             guard let refreshToken = credentials.refreshToken else { throw AccountError.needsLogin }
             let (data, response) = try await http.send(

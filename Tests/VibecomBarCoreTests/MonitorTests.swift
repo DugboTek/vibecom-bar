@@ -108,6 +108,7 @@ struct AccountMonitorTests {
 
         let written = try #require(secrets.contents(of: ClaudeKeychain.service))
         #expect(try ClaudeCredentials(keychainJSON: written).accessToken == "at-stale")
+        #expect(secrets.reads(of: ClaudeKeychain.service) == 0)
         #expect(status.error == .needsLogin)
         #expect(http.sent.isEmpty)
     }
