@@ -4,6 +4,9 @@ import Foundation
 
 public protocol SecretStore: Sendable {
     func read(service: String) throws -> Data?
+    /// Reads an item owned by another application through that application's
+    /// trusted helper, rather than making this process part of its ACL.
+    func readExternal(service: String) throws -> Data?
     func write(_ data: Data, service: String) throws
     /// Replaces an existing item without creating it or changing its ownership
     /// metadata. Used for credential stores owned by another application.
@@ -16,6 +19,7 @@ public protocol SecretStore: Sendable {
 }
 
 extension SecretStore {
+    public func readExternal(service: String) throws -> Data? { try read(service: service) }
     public func replaceExisting(_ data: Data, service: String) throws {
         guard try read(service: service) != nil else { throw VaultError.missingExternalSecret }
         try write(data, service: service)
@@ -298,12 +302,12 @@ public struct AccountActivator: Sendable {
     public func activate(_ account: StoredAccount) async throws {
         switch try await vault.secret(for: account.id) {
         case .claude(let credentials):
-            try backUpClaudeKeychainOnce()
-            guard let existing = try environment.secrets.read(service: ClaudeKeychain.service) else {
+            guard let existing = try environment.secrets.readExternal(service: ClaudeKeychain.service) else {
                 // Claude must create its own live item. If Vibecom creates it,
                 // macOS trusts only Vibecom and Claude Code prompts forever.
                 throw VaultError.missingExternalSecret
             }
+            try backUpClaudeKeychainOnce(existing)
             let merged = try ClaudeCredentials.merge(credentials, intoKeychainJSON: existing)
             try environment.secrets.replaceExisting(merged, service: ClaudeKeychain.service)
 
@@ -353,7 +357,9 @@ public struct AccountActivator: Sendable {
     private func liveAccessToken(for provider: Provider) throws -> String? {
         switch provider {
         case .claude:
-            guard let data = try environment.secrets.read(service: ClaudeKeychain.service) else { return nil }
+            guard let data = try environment.secrets.readExternal(service: ClaudeKeychain.service) else {
+                return nil
+            }
             return try? ClaudeCredentials(keychainJSON: data).accessToken
         case .codex:
             guard let data = try environment.files.read(environment.codexAuthFile) else { return nil }
@@ -367,11 +373,9 @@ public struct AccountActivator: Sendable {
         try environment.files.write(current, to: backup)
     }
 
-    private func backUpClaudeKeychainOnce() throws {
+    private func backUpClaudeKeychainOnce(_ current: Data) throws {
         let backupService = ClaudeKeychain.service + " (vibecom backup)"
-        guard try environment.secrets.read(service: backupService) == nil,
-            let current = try environment.secrets.read(service: ClaudeKeychain.service)
-        else { return }
+        guard try environment.secrets.read(service: backupService) == nil else { return }
         try environment.secrets.write(current, service: backupService)
     }
 }
@@ -398,7 +402,7 @@ public struct AccountImporter: Sendable {
 
     /// Captures whoever is signed in to Claude Code right now.
     public func captureActiveClaudeLogin() throws -> CapturedLogin {
-        guard let data = try environment.secrets.read(service: ClaudeKeychain.service) else {
+        guard let data = try environment.secrets.readExternal(service: ClaudeKeychain.service) else {
             throw ImportError.noActiveLogin(.claude)
         }
         return try captureClaudeLogin(keychainService: ClaudeKeychain.service, payload: data)
@@ -407,7 +411,7 @@ public struct AccountImporter: Sendable {
     /// Captures a sign-in that ran under its own CLAUDE_CONFIG_DIR, named after
     /// the account recorded in that directory's own `.claude.json`.
     public func captureClaudeLogin(keychainService: String, configDir: URL) throws -> CapturedLogin {
-        guard let data = try environment.secrets.read(service: keychainService) else {
+        guard let data = try environment.secrets.readExternal(service: keychainService) else {
             throw ImportError.noActiveLogin(.claude)
         }
         return try captureClaudeLogin(

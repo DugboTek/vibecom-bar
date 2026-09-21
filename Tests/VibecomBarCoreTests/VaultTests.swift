@@ -9,6 +9,7 @@ final class MemorySecretStore: SecretStore, @unchecked Sendable {
     private let lock = NSLock()
     private var items: [String: Data]
     private var readLog: [String] = []
+    private var externalReadLog: [String] = []
     private var writeLog: [String] = []
 
     init(_ seed: [String: Data] = [:]) { items = seed }
@@ -17,10 +18,19 @@ final class MemorySecretStore: SecretStore, @unchecked Sendable {
     func reads(of service: String) -> Int { lock.withLock { readLog.filter { $0 == service }.count } }
     func writes(of service: String) -> Int { lock.withLock { writeLog.filter { $0 == service }.count } }
     func reads(withPrefix prefix: String) -> Int { lock.withLock { readLog.filter { $0.hasPrefix(prefix) }.count } }
+    func externalReads(of service: String) -> Int {
+        lock.withLock { externalReadLog.filter { $0 == service }.count }
+    }
 
     func read(service: String) throws -> Data? {
         lock.withLock {
             readLog.append(service)
+            return items[service]
+        }
+    }
+    func readExternal(service: String) throws -> Data? {
+        lock.withLock {
+            externalReadLog.append(service)
             return items[service]
         }
     }
@@ -247,6 +257,8 @@ struct ActivationTests {
         let written = try #require(secrets.contents(of: ClaudeKeychain.service))
         let root = try #require(try JSONSerialization.jsonObject(with: written) as? [String: Any])
         #expect((root["mcpOAuth"] as? [String: Any])?["linear|638130d5"] != nil)
+        #expect(secrets.reads(of: ClaudeKeychain.service) == 0)
+        #expect(secrets.externalReads(of: ClaudeKeychain.service) == 1)
     }
 
     @Test("tells the CLI which account is signed in, without disturbing other settings")
@@ -373,6 +385,8 @@ struct AccountImportTests {
         #expect(captured.identity.email == "live@example.com")
         #expect(captured.identity.plan == "claude_max")
         #expect(captured.secret == .claude(try ClaudeCredentials(keychainJSON: ClaudeCredentialTests.keychainJSON(accessToken: "at-live"))))
+        #expect(secrets.reads(of: ClaudeKeychain.service) == 0)
+        #expect(secrets.externalReads(of: ClaudeKeychain.service) == 1)
     }
 
     @Test("reads a Codex login out of the profile directory a guided sign-in used")
