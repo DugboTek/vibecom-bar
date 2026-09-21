@@ -3,6 +3,9 @@ import Security
 
 public enum StoreError: Error, Equatable {
     case keychain(OSStatus)
+    case securityTool(Int32)
+    case securityToolTimedOut
+    case invalidExternalSecret
 }
 
 /// Account tokens live in the login keychain, never in a file this app writes.
@@ -27,6 +30,10 @@ public struct KeychainSecretStore: SecretStore {
         case errSecItemNotFound: return nil
         default: throw StoreError.keychain(status)
         }
+    }
+
+    public func readExternal(service: String) throws -> Data? {
+        try SecurityToolKeychain.read(service: service, account: NSUserName())
     }
 
     public func write(_ data: Data, service: String) throws {
@@ -54,13 +61,8 @@ public struct KeychainSecretStore: SecretStore {
     /// Changes only the secret bytes. In particular, it does not relabel an
     /// external app's item or create one whose ACL would belong to Vibecom.
     public func replaceExisting(_ data: Data, service: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-        ]
-        let attributes: [String: Any] = [kSecValueData as String: data]
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        guard status == errSecSuccess else { throw StoreError.keychain(status) }
+        try SecurityToolKeychain.replaceExisting(
+            data, service: service, account: NSUserName())
     }
 
     public func delete(service: String) throws {
