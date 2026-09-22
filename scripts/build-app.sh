@@ -17,11 +17,14 @@ BUNDLE_ID="build.vibecom.menubar"
 
 echo "› Building release binary"
 swift build -c release --product VibecomBar
+swift build -c release --product VibecomRelay
 
 echo "› Assembling bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$ROOT/.build/release/VibecomBar" "$APP/Contents/MacOS/VibecomBar"
+cp "$ROOT/.build/release/VibecomRelay" "$APP/Contents/MacOS/VibecomRelay"
+cp -R "$ROOT/Resources/VibecomRelayClaudePlugin" "$APP/Contents/Resources/VibecomRelayClaudePlugin"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -75,13 +78,18 @@ fi
 if [[ -n "$IDENTITY" ]]; then
   echo "› Signing as $IDENTITY"
   if [[ "$IDENTITY" == Developer\ ID\ Application:* ]]; then
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+      "$APP/Contents/MacOS/VibecomRelay"
     codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
   else
+    codesign --force --options runtime --timestamp=none --sign "$IDENTITY" \
+      "$APP/Contents/MacOS/VibecomRelay"
     codesign --force --options runtime --timestamp=none --sign "$IDENTITY" "$APP"
   fi
 else
   echo "› No signing certificate found; signing ad-hoc."
   echo "  macOS will ask for keychain access again after every rebuild."
+  codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/VibecomRelay"
   codesign --force --sign - --timestamp=none "$APP"
 fi
 codesign --verify --strict "$APP"

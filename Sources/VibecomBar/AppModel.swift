@@ -32,6 +32,8 @@ final class AppModel {
     private(set) var vibecomStanding: VibecomStanding?
     /// Human-readable result of the most recent automatic account decision.
     private(set) var autoSwapActivity: String?
+    private(set) var relayIsInstalled = false
+    private(set) var relayStatusMessage: String?
     var page: Page = .accounts
 
     var preferences: Preferences {
@@ -55,6 +57,8 @@ final class AppModel {
     private let support: URL
     private let vibecomProfile: VibecomProfile?
     private let vibecomStandingService: VibecomStandingService
+    private let relayController = RelayController()
+    private let relayInstaller: RelayInstaller
 
     private var timerTask: Task<Void, Never>?
     private var tokenTask: Task<Void, Never>?
@@ -94,6 +98,19 @@ final class AppModel {
         preferencesStore = PreferencesStore(
             files: files, url: support.appendingPathComponent("preferences.json"))
         preferences = preferencesStore.load()
+        let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent()
+            ?? URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+        let resources = Bundle.main.resourceURL ?? executableDirectory
+        relayInstaller = RelayInstaller(
+            relayExecutable: executableDirectory.appendingPathComponent("VibecomRelay"),
+            claudePlugin: resources.appendingPathComponent(
+                "VibecomRelayClaudePlugin", isDirectory: true))
+        relayIsInstalled = relayInstaller.isInstalled
+        if preferences.liveRelayEnabled && !relayIsInstalled {
+            // Never mutate command resolution merely because the app launched.
+            // A missing relay stays visibly off until the user enables it again.
+            preferences.liveRelayEnabled = false
+        }
     }
 
     // MARK: - Lifecycle
@@ -246,11 +263,22 @@ final class AppModel {
             do {
                 try await activator.activate(decision.to)
                 switched = true
-                autoSwapActivity =
-                    "Switched (decision.provider.displayName) to the account resetting soonest."
+                let relays = preferences.liveRelayEnabled && relayIsInstalled
+                    ? relayController.queueHandoff(from: decision.from, to: decision.to) : 0
+                if relays > 0 {
+                    autoSwapActivity = "Moving \(relays) live \(decision.provider.displayName) session\(relays == 1 ? "" : "s") after the current turn."
+                } else {
+                    autoSwapActivity = decision.successMessage
+                }
+                if decision.requiresProcessRestart && relays == 0 {
+                    post(
+                        id: "auto-swap-codex-\(decision.to.id.uuidString)",
+                        title: "Codex account changed",
+                        body: "Quit the limited Codex session, then run codex resume to continue on the new account.")
+                }
             } catch {
                 autoSwapActivity =
-                    "Couldn't switch (decision.provider.displayName): (error.localizedDescription)"
+                    "Couldn't switch \(decision.provider.displayName): \(error.localizedDescription)"
             }
         }
 
@@ -283,10 +311,45 @@ final class AppModel {
 
     func activate(_ status: AccountStatus) async {
         do {
+            let source = statuses.first {
+                $0.account.provider == status.account.provider && $0.isActive
+            }?.account
             try await activator.activate(status.account)
+            let relays = preferences.liveRelayEnabled && relayIsInstalled
+                ? relayController.queueHandoff(from: source, to: status.account) : 0
+            if relays > 0 {
+                autoSwapActivity = "Moving \(relays) live \(status.account.provider.displayName) session\(relays == 1 ? "" : "s") after the current turn."
+            } else if status.account.provider == .codex {
+                autoSwapActivity =
+                    "Codex account changed. Restart Codex and resume this session to use it."
+                post(
+                    id: "manual-swap-codex-\(status.id.uuidString)",
+                    title: "Codex account changed",
+                    body: "Quit the current Codex session, then run codex resume to continue on this account.")
+            }
             await refresh()
         } catch {
             signInState = .failed("Couldn't switch: \(error.localizedDescription)")
+        }
+    }
+
+    func setLiveRelayEnabled(_ enabled: Bool) {
+        do {
+            if enabled {
+                try relayInstaller.install()
+                relayIsInstalled = true
+                preferences.liveRelayEnabled = true
+                relayStatusMessage = "Ready. New Claude and Codex sessions can move accounts between turns."
+            } else {
+                try relayInstaller.uninstall()
+                relayIsInstalled = false
+                preferences.liveRelayEnabled = false
+                relayStatusMessage = "Off. Your original Claude and Codex commands were restored."
+            }
+        } catch {
+            relayIsInstalled = relayInstaller.isInstalled
+            preferences.liveRelayEnabled = relayIsInstalled
+            relayStatusMessage = error.localizedDescription
         }
     }
 
@@ -430,11 +493,15 @@ final class AppModel {
     }
 
     private func post(_ alert: UsageNotification) {
+        post(id: alert.id, title: alert.title, body: alert.body)
+    }
+
+    private func post(id: String, title: String, body: String) {
         guard notificationsAuthorized else { return }
         let content = UNMutableNotificationContent()
-        content.title = alert.title
-        content.body = alert.body
+        content.title = title
+        content.body = body
         UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: alert.id, content: content, trigger: nil))
+            UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 }

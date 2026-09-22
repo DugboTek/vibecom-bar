@@ -15,6 +15,7 @@ struct PreferencesTests {
         #expect(preferences.notifyOnReset)
         #expect(!preferences.blurAccountNames)
         #expect(!preferences.autoSwapEnabled)
+        #expect(!preferences.liveRelayEnabled)
     }
 
     @Test("remembers settings across launches")
@@ -26,6 +27,7 @@ struct PreferencesTests {
         preferences.menuBarStyle = .highestUsage
         preferences.blurAccountNames = true
         preferences.autoSwapEnabled = true
+        preferences.liveRelayEnabled = true
 
         try PreferencesStore(files: files, url: url).save(preferences)
 
@@ -34,6 +36,7 @@ struct PreferencesTests {
         #expect(loaded.menuBarStyle == .highestUsage)
         #expect(loaded.blurAccountNames)
         #expect(loaded.autoSwapEnabled)
+        #expect(loaded.liveRelayEnabled)
     }
 
     @Test("keeps existing preferences when privacy setting is introduced")
@@ -57,6 +60,7 @@ struct PreferencesTests {
         #expect(preferences.launchAtLogin)
         #expect(!preferences.blurAccountNames)
         #expect(!preferences.autoSwapEnabled)
+        #expect(!preferences.liveRelayEnabled)
     }
 
     @Test("falls back to defaults when the settings file is damaged")

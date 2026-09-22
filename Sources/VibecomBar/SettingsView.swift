@@ -36,7 +36,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Switch accounts at 99%")
                             .font(.system(size: 12))
-                        Text("Uses the available account whose next reset is soonest.")
+                        Text("Uses the available account whose usage resets soonest.")
                             .font(.system(size: 10))
                             .foregroundStyle(.tertiary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -61,6 +61,39 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
+                }
+            }
+
+            group("Live Sessions") {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Live account handoff")
+                            .font(.system(size: 12))
+                        Text("Moves newly launched sessions between turns. Anything already open stays untouched.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle(
+                        "Live account handoff",
+                        isOn: Binding(
+                            get: { model.preferences.liveRelayEnabled && model.relayIsInstalled },
+                            set: { model.setLiveRelayEnabled($0) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+
+                if let message = model.relayStatusMessage {
+                    Divider().padding(.leading, 12)
+                    Text(message)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
                 }
             }
 

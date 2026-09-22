@@ -7,6 +7,7 @@ let package = Package(
     targets: [
         .target(name: "VibecomBarCore"),
         .executableTarget(name: "VibecomBar", dependencies: ["VibecomBarCore"]),
+        .executableTarget(name: "VibecomRelay", dependencies: ["VibecomBarCore"]),
         .testTarget(
             name: "VibecomBarCoreTests",
             dependencies: ["VibecomBarCore"],
