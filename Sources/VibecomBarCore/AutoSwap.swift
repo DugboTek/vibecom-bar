@@ -10,6 +10,19 @@ public struct AutoSwapDecision: Equatable, Sendable {
         self.from = from
         self.to = to
     }
+
+    /// Codex deliberately keeps the account a process started with. Updating
+    /// auth.json prepares the next process, but cannot retarget a live one.
+    public var successMessage: String {
+        switch provider {
+        case .claude:
+            "Switched Claude Code to the account resetting soonest."
+        case .codex:
+            "Codex account changed. Restart Codex and resume this session to use it."
+        }
+    }
+
+    public var requiresProcessRestart: Bool { provider == .codex }
 }
 
 /// Chooses a replacement once the active account reaches 99%. The account

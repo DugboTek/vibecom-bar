@@ -12,6 +12,7 @@ public struct Preferences: Codable, Equatable, Sendable {
     public var launchAtLogin: Bool = false
     public var blurAccountNames: Bool = false
     public var autoSwapEnabled: Bool = false
+    public var liveRelayEnabled: Bool = false
 
     public init() {}
 
@@ -25,6 +26,7 @@ public struct Preferences: Codable, Equatable, Sendable {
         launchAtLogin = try values.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
         blurAccountNames = try values.decodeIfPresent(Bool.self, forKey: .blurAccountNames) ?? false
         autoSwapEnabled = try values.decodeIfPresent(Bool.self, forKey: .autoSwapEnabled) ?? false
+        liveRelayEnabled = try values.decodeIfPresent(Bool.self, forKey: .liveRelayEnabled) ?? false
         refreshInterval = storedRefreshInterval
     }
 
@@ -41,7 +43,7 @@ public struct Preferences: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case storedRefreshInterval = "refreshInterval"
         case menuBarStyle, alertThresholds, notifyOnReset, showInactiveAccounts, launchAtLogin,
-            blurAccountNames, autoSwapEnabled
+            blurAccountNames, autoSwapEnabled, liveRelayEnabled
     }
 }
 

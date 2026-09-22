@@ -101,4 +101,31 @@ struct AutoSwapTests {
         let decisions = AutoSwapPlanner.decisions(in: statuses, now: Self.now)
         #expect(decisions.map(\.provider) == [.claude, .codex])
     }
+
+    @Test("tells Codex users that a running session must be resumed")
+    func explainsCodexProcessRestart() throws {
+        let statuses = [
+            status("spent", provider: .codex, active: true, used: 1, resetIn: 3600),
+            status("free", provider: .codex, used: 0, resetIn: 7200),
+        ]
+        let decision = try #require(
+            AutoSwapPlanner.decision(for: .codex, in: statuses, now: Self.now))
+
+        #expect(decision.requiresProcessRestart)
+        #expect(decision.successMessage.contains("Restart Codex"))
+        #expect(decision.successMessage.contains("resume this session"))
+    }
+
+    @Test("does not ask Claude users to restart")
+    func claudeSwitchesLive() throws {
+        let statuses = [
+            status("spent", active: true, used: 1, resetIn: 3600),
+            status("free", used: 0, resetIn: 7200),
+        ]
+        let decision = try #require(
+            AutoSwapPlanner.decision(for: .claude, in: statuses, now: Self.now))
+
+        #expect(!decision.requiresProcessRestart)
+        #expect(!decision.successMessage.contains("Restart"))
+    }
 }

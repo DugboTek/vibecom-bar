@@ -43,6 +43,12 @@ Choose the account you want Claude Code or Codex to use next. Nothing changes
 until you ask. Or turn on Auto Swap to move at 99% to the available account
 whose next reset is soonest.
 
+Live Handoff is optional. When enabled, sessions launched afterward can move to
+the selected account between turns and continue the same conversation. It works
+from Terminal, tmux, Xirp, and Conductor because the relay sits at the CLI entry
+point—not inside a particular terminal. Sessions that were already running when
+you enabled it stay untouched.
+
 ### Follow your work as it happens
 
 See today's tokens, your live token rate, and estimated API value across both
@@ -74,7 +80,8 @@ source code stay on your Mac.
 
 Vibecom Bar reads usage from the providers and token totals from the local
 files their CLIs already create. It does not upload your coding activity to
-vibecom.build, and it never switches an account unless you choose **Use**.
+vibecom.build. Accounts change only when you choose **Use**, or when you turn
+on **Auto Swap** and the active account reaches 99%.
 
 - Credentials are protected by macOS Keychain.
 - Saved account details remain local to your Mac.
