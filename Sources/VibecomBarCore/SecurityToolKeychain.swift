@@ -9,25 +9,80 @@ enum SecurityToolKeychain {
     static let timeout: TimeInterval = 10
 
     static func read(service: String, account: String) throws -> Data? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = [
-            "find-generic-password", "-a", account, "-w", "-s", service,
-        ]
-        let output = Pipe()
-        let errors = Pipe()
-        process.standardOutput = output
-        process.standardError = errors
-        try process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus == 44 { return nil }
-        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
-            throw StoreError.securityTool(process.terminationStatus)
+        let result = try captureOutput(
+            executable: "/usr/bin/security",
+            arguments: ["find-generic-password", "-a", account, "-w", "-s", service])
+        if result.status == 44 { return nil }
+        guard result.exitedNormally, result.status == 0 else {
+            throw StoreError.securityTool(result.status)
         }
-        var data = output.fileHandleForReading.readDataToEndOfFile()
+        var data = result.data
         while data.last == 10 || data.last == 13 { data.removeLast() }
         return data
+    }
+
+    struct CommandOutput {
+        let data: Data
+        let status: Int32
+        let exitedNormally: Bool
+    }
+
+    /// Drain stdout while the child runs. Waiting for exit first deadlocks once
+    /// Claude's credential JSON fills the pipe (16 KB on this macOS version).
+    static func captureOutput(
+        executable: String, arguments: [String], timeout: TimeInterval = 60
+    ) throws -> CommandOutput {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let deadline = Date().addingTimeInterval(timeout)
+        let descriptor = output.fileHandleForReading.fileDescriptor
+        var data = Data()
+        var reachedEOF = false
+
+        while !reachedEOF || process.isRunning {
+            if Date() >= deadline {
+                kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+                throw StoreError.securityToolTimedOut
+            }
+            if reachedEOF {
+                usleep(50_000)
+                continue
+            }
+            var pending = pollfd(fd: descriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
+            let ready = poll(&pending, 1, 100)
+            if ready < 0 {
+                if errno == EINTR { continue }
+                let code = errno
+                kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+                throw StoreError.securityTool(code)
+            }
+            guard ready > 0 else { continue }
+            if pending.revents & Int16(POLLIN | POLLHUP) != 0 {
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                let count = Darwin.read(descriptor, &buffer, buffer.count)
+                if count > 0 {
+                    data.append(contentsOf: buffer.prefix(count))
+                } else if count == 0 {
+                    reachedEOF = true
+                } else if errno != EINTR {
+                    let code = errno
+                    kill(process.processIdentifier, SIGKILL)
+                    process.waitUntilExit()
+                    throw StoreError.securityTool(code)
+                }
+            }
+        }
+        process.waitUntilExit()
+        return CommandOutput(
+            data: data, status: process.terminationStatus,
+            exitedNormally: process.terminationReason == .exit)
     }
 
     static func replaceExisting(_ data: Data, service: String, account: String) throws {
