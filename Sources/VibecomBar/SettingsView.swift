@@ -4,6 +4,9 @@ import VibecomBarCore
 
 struct SettingsView: View {
     @Bindable var model: AppModel
+    @State private var adoptionProvider: Provider = .codex
+    @State private var adoptionSessionID = ""
+    @State private var showingAdoptionConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -94,6 +97,49 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
+                }
+
+                Divider().padding(.leading, 12)
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Adopt an existing session")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("Resume a conversation opened before Live Handoff was enabled.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 6) {
+                        Picker("Provider", selection: $adoptionProvider) {
+                            ForEach(Provider.allCases) { provider in
+                                Text(provider.displayName).tag(provider)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .fixedSize()
+
+                        TextField("Session ID", text: $adoptionSessionID)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 10, design: .monospaced))
+
+                        Button("Adopt…") { showingAdoptionConfirmation = true }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(adoptionSessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                || !model.preferences.liveRelayEnabled || !model.relayIsInstalled)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .alert("Resume this session through Vibecom?", isPresented: $showingAdoptionConfirmation) {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Resume Session") {
+                        model.adoptExistingSession(
+                            provider: adoptionProvider, sessionID: adoptionSessionID)
+                        adoptionSessionID = ""
+                    }
+                } message: {
+                    Text("First exit the original \(adoptionProvider.displayName) session after it reaches a safe stopping point. Vibecom will open the same conversation in a new relay-managed Terminal window. The old process is not closed for you.")
                 }
             }
 

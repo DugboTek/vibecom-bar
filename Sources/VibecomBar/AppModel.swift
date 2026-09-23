@@ -353,6 +353,22 @@ final class AppModel {
         }
     }
 
+    func adoptExistingSession(provider: Provider, sessionID: String) {
+        let identifier = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !identifier.isEmpty else {
+            relayStatusMessage = "Enter the session ID you want to resume."
+            return
+        }
+        do {
+            try TerminalRunner.resume(
+                provider: provider, sessionID: identifier,
+                relayEnabled: preferences.liveRelayEnabled && relayIsInstalled)
+            relayStatusMessage = "Opened the session in a new relay-managed terminal."
+        } catch {
+            relayStatusMessage = error.localizedDescription
+        }
+    }
+
     func remove(_ status: AccountStatus) async {
         try? await vault.remove(status.account.id)
         await refresh()

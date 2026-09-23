@@ -42,6 +42,41 @@ enum TerminalRunner {
         NSWorkspace.shared.open(url)
     }
 
+    static func resume(
+        provider: Provider, sessionID: String, relayEnabled: Bool
+    ) throws {
+        guard relayEnabled else { throw RunError.cliMissing("Vibecom Relay is not enabled") }
+        guard let executable = which(provider == .claude ? "claude" : "codex") else {
+            throw RunError.cliMissing(provider == .claude ? "claude" : "codex")
+        }
+        let arguments = RelayArguments.resume(provider: provider, sessionID: sessionID, original: [])
+        let command = ([executable.path] + arguments).map(shellQuoted).joined(separator: " ")
+        let script = """
+            #!/bin/zsh
+            clear
+            echo "Resuming your \(provider.displayName) conversation through Vibecom Relay."
+            echo "This opens a new terminal process and keeps the conversation history."
+            echo
+            \(command)
+            status=$?
+            echo
+            if [ $status -eq 0 ]; then
+              echo "Session ended (exit 0). You can close this window."
+            else
+              echo "Session ended with exit $status. You can close this window or try again."
+            fi
+            """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vibecom-bar-adopt-\(UUID().uuidString).command")
+        try Data(script.utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        NSWorkspace.shared.open(url)
+    }
+
+    private static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     /// Looks where a login shell would, since a menu bar app does not inherit
     /// the PATH from a shell profile.
     static func which(_ command: String) -> URL? {
