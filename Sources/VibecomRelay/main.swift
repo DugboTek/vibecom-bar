@@ -143,6 +143,8 @@ private final class RelayRuntime: @unchecked Sendable {
 private enum RelayMain {
     static func run() -> Never {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.first == "install" { installerCommand(uninstall: false) }
+        if arguments.first == "uninstall" { installerCommand(uninstall: true) }
         if arguments.first == "boundary" { boundary(Array(arguments.dropFirst())) }
 
         let name = URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent.lowercased()
@@ -175,6 +177,29 @@ private enum RelayMain {
             exit(1)
         }
         dispatchMain()
+    }
+
+    private static func installerCommand(uninstall: Bool) -> Never {
+        let helper = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        let resources = helper.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources", isDirectory: true)
+        let installer = RelayInstaller(
+            relayExecutable: helper,
+            claudePlugin: resources.appendingPathComponent(
+                "VibecomRelayClaudePlugin", isDirectory: true))
+        do {
+            if uninstall {
+                try installer.uninstall()
+                print("Vibecom Relay: uninstalled")
+            } else {
+                try installer.install()
+                print("Vibecom Relay: installed")
+            }
+            exit(0)
+        } catch {
+            fputs("Vibecom Relay: \(error.localizedDescription)\n", stderr)
+            exit(1)
+        }
     }
 
     private static func boundary(_ arguments: [String]) -> Never {
