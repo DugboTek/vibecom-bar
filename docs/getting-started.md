@@ -45,7 +45,14 @@ does not log out the account your normal CLI session uses.
 ## Switch accounts
 
 Click **Use** beside an inactive account. New CLI sessions use the selected
-account; a session that is already running keeps the login it started with.
+account. To carry an open conversation across accounts, enable **Live account
+handoff** in Settings before starting the session. At the next turn boundary,
+Vibecom resumes the conversation with the selected account.
+
+Live Handoff works in Terminal, tmux, and newly launched Xirp sessions that use
+the installed Claude Code or Codex command. Sessions already running before you enable Live Handoff
+keep their original process; use **Adopt an existing session** in Settings after
+ending that process at a safe stopping point.
 
 The first Claude switch can produce one Keychain authorization prompt. A
 repeating prompt is not expected; follow the

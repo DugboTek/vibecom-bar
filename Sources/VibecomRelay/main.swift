@@ -43,6 +43,13 @@ private final class RelayRuntime: @unchecked Sendable {
         }
         child = process
         try process.run()
+        // Foundation starts children in a new process group. In a terminal that
+        // makes the child a background job, so its first stdin read gets SIGTTIN.
+        // Give the child group the foreground terminal before allowing it to run.
+        if isatty(STDIN_FILENO) == 1 {
+            setTerminalForeground(process.processIdentifier)
+            _ = kill(process.processIdentifier, SIGCONT)
+        }
         session.childPID = process.processIdentifier
         session.accountKey = pending?.accountKey ?? Self.currentAccountKey(provider: provider)
         session.updatedAt = Date()
@@ -93,6 +100,7 @@ private final class RelayRuntime: @unchecked Sendable {
     }
 
     private func childFinished(status: Int32) {
+        if isatty(STDIN_FILENO) == 1 { setTerminalForeground(relayPID) }
         guard shouldResume, let sessionID = session.sessionID else {
             cleanup()
             exit(status)
@@ -121,6 +129,16 @@ private final class RelayRuntime: @unchecked Sendable {
         try? FileManager.default.removeItem(at: RelayPaths.session(relayPID))
         try? FileManager.default.removeItem(at: RelayPaths.command(relayPID))
         try? FileManager.default.removeItem(at: RelayPaths.event(relayPID))
+    }
+
+    private func setTerminalForeground(_ processGroup: pid_t) {
+        var blocked = sigset_t()
+        sigemptyset(&blocked)
+        sigaddset(&blocked, SIGTTOU)
+        var previous = sigset_t()
+        sigprocmask(SIG_BLOCK, &blocked, &previous)
+        _ = tcsetpgrp(STDIN_FILENO, processGroup)
+        sigprocmask(SIG_SETMASK, &previous, nil)
     }
 
     private static func currentAccountKey(provider: Provider) -> String? {

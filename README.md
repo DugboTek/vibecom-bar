@@ -45,9 +45,8 @@ whose next reset is soonest.
 
 Live Handoff is optional. When enabled, sessions launched afterward can move to
 the selected account between turns and continue the same conversation. It works
-from Terminal, tmux, Xirp, and Conductor because the relay sits at the CLI entry
-point—not inside a particular terminal. Sessions that were already running when
-you enabled it stay untouched.
+in Terminal, tmux, and Xirp when they launch through the installed Vibecom
+command. Sessions that were already running when you enabled it stay untouched.
 
 ### Follow your work as it happens
 
