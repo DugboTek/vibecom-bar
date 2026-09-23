@@ -43,6 +43,13 @@ struct RelayTests {
             provider: .codex, sessionID: "replacement",
             original: ["resume", "old-thread", "--full-auto"])
         #expect(existing == ["resume", "replacement", "--full-auto"])
+
+        let xirp = RelayArguments.resume(
+            provider: .codex, sessionID: "replacement",
+            original: ["-c", "check_for_update_on_startup=false", "resume", "old-thread",
+                       "--no-alt-screen", "--model", "gpt-6-sol", "Reply with READY"])
+        #expect(xirp == ["-c", "check_for_update_on_startup=false", "resume", "replacement",
+                         "--no-alt-screen", "--model", "gpt-6-sol"])
     }
 
     @Test("Claude resume keeps launch flags and never replays the prompt")
@@ -56,6 +63,13 @@ struct RelayTests {
             provider: .claude, sessionID: "replacement",
             original: ["--resume", "old-session", "--permission-mode", "plan"])
         #expect(existing == ["--resume", "replacement", "--permission-mode", "plan"])
+
+        let withPrompt = RelayArguments.resume(
+            provider: .claude, sessionID: "replacement",
+            original: ["--model", "sonnet", "--resume", "old-session", "--permission-mode", "plan",
+                       "Reply with READY"])
+        #expect(withPrompt == ["--model", "sonnet", "--resume", "replacement",
+                               "--permission-mode", "plan"])
     }
 
     @Test("handoff finds only live matching sessions and writes a private command")
@@ -131,6 +145,67 @@ struct RelayTests {
         #expect(!restoredHooks.contains("boundary codex"))
     }
 
+    @Test("moving the app updates relay links and hooks without replacing CLI backups")
+    func installerMovesToNewBundle() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        let plugin = root.appendingPathComponent("plugin", isDirectory: true)
+        let hooks = root.appendingPathComponent("codex/hooks.json")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: hooks.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{\"hooks\":{\"Stop\":[{\"hooks\":[{\"command\":\"keep-me\"}]}]}}".utf8)
+            .write(to: hooks)
+        for name in ["codex", "claude"] {
+            let original = root.appendingPathComponent("original-\(name)")
+            try Data(name.utf8).write(to: original)
+            try FileManager.default.createSymbolicLink(
+                at: bin.appendingPathComponent(name), withDestinationURL: original)
+        }
+
+        func helper(_ version: String) throws -> URL {
+            let executable = root.appendingPathComponent(version)
+                .appendingPathComponent("Vibecom Bar.app/Contents/MacOS/VibecomRelay")
+            try FileManager.default.createDirectory(
+                at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(version.utf8).write(to: executable)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: executable.path)
+            return executable
+        }
+
+        let oldHelper = try helper("old")
+        let newHelper = try helper("new")
+        let old = RelayInstaller(relayExecutable: oldHelper, claudePlugin: plugin,
+                                 binDirectory: bin, codexHooksURL: hooks)
+        let current = RelayInstaller(relayExecutable: newHelper, claudePlugin: plugin,
+                                     binDirectory: bin, codexHooksURL: hooks)
+        try old.install()
+        try current.install()
+        #expect(current.isInstalled)
+        #expect(!old.isInstalled)
+        for name in ["codex", "claude"] {
+            #expect(FileManager.default.fileExists(
+                atPath: bin.appendingPathComponent("\(name).vibecom-original").path))
+        }
+        let migratedHooks = try String(contentsOf: hooks, encoding: .utf8)
+            .replacingOccurrences(of: "\\/", with: "/")
+        #expect(migratedHooks.contains(newHelper.path))
+        #expect(!migratedHooks.contains(oldHelper.path))
+        #expect(migratedHooks.contains("keep-me"))
+
+        try current.uninstall()
+        for name in ["codex", "claude"] {
+            let live = bin.appendingPathComponent(name)
+            let destination = try FileManager.default.destinationOfSymbolicLink(atPath: live.path)
+            #expect(destination == root.appendingPathComponent("original-\(name)").path)
+        }
+        let restoredHooks = try String(contentsOf: hooks, encoding: .utf8)
+        #expect(restoredHooks.contains("keep-me"))
+        #expect(!restoredHooks.contains("boundary codex"))
+    }
+
     @Test("partial installation rolls back both commands")
     func installerRollback() throws {
         let root = try temporaryDirectory()
@@ -175,7 +250,12 @@ struct RelayTests {
 
         let process = Process()
         process.executableURL = shim
-        process.arguments = ["-C", "/tmp/project", "do not replay me"]
+        // Session managers such as Xirp resume an existing thread and append
+        // the first prompt as a positional argument.
+        process.arguments = [
+            "-C", "/tmp/project", "resume", "old-thread", "--no-alt-screen",
+            "do not replay me"
+        ]
         var environment = ProcessInfo.processInfo.environment
         environment["VIBECOM_RELAY_RUNTIME_DIR"] = runtime.path
         environment["VIBECOM_RELAY_ORIGINAL"] = fake.path
@@ -219,7 +299,7 @@ struct RelayTests {
             let launches = try String(contentsOf: log, encoding: .utf8)
                 .split(separator: "\n").map(String.init)
             #expect(launches[0].contains("do not replay me"))
-            #expect(launches[1] == "resume thread-42 -C /tmp/project")
+            #expect(launches[1] == "-C /tmp/project resume thread-42 --no-alt-screen")
             #expect(!launches[1].contains("do not replay me"))
         } catch {
             if let session = try? RelayFiles.read(

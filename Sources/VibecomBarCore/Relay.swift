@@ -131,26 +131,22 @@ public enum RelayArguments {
 
     private static func codexResume(sessionID: String, original: [String]) -> [String] {
         if let index = original.firstIndex(of: "resume") {
-            var result = original
-            if result.indices.contains(index + 1), !result[index + 1].hasPrefix("-") {
-                result[index + 1] = sessionID
-            } else {
-                result.insert(sessionID, at: index + 1)
-            }
-            return result
+            let before = optionsOnly(Array(original[..<index]), provider: .codex)
+            let resumeArguments = Array(original[(index + 1)...])
+            let after = resumeArguments.first?.hasPrefix("-") == false
+                ? Array(resumeArguments.dropFirst()) : resumeArguments
+            return before + ["resume", sessionID] + optionsOnly(after, provider: .codex)
         }
         return ["resume", sessionID] + optionsOnly(original, provider: .codex)
     }
 
     private static func claudeResume(sessionID: String, original: [String]) -> [String] {
         if let index = original.firstIndex(where: { $0 == "--resume" || $0 == "-r" }) {
-            var result = original
-            if result.indices.contains(index + 1) {
-                result[index + 1] = sessionID
-            } else {
-                result.append(sessionID)
-            }
-            return result
+            let before = optionsOnly(Array(original[..<index]), provider: .claude)
+            let resumeArguments = Array(original[(index + 1)...])
+            let after = resumeArguments.first?.hasPrefix("-") == false
+                ? Array(resumeArguments.dropFirst()) : resumeArguments
+            return before + ["--resume", sessionID] + optionsOnly(after, provider: .claude)
         }
         return ["--resume", sessionID] + optionsOnly(original, provider: .claude)
     }
@@ -274,6 +270,11 @@ public enum RelayInstallError: LocalizedError {
 }
 
 public struct RelayInstaller: Sendable {
+    private enum PreviousInstall {
+        case originalCommand
+        case relayLink(URL)
+    }
+
     public let relayExecutable: URL
     public let claudePlugin: URL
     public let binDirectory: URL
@@ -311,14 +312,19 @@ public struct RelayInstaller: Sendable {
         }
         let hooksExisted = FileManager.default.fileExists(atPath: codexHooksURL.path)
         let previousHooks = hooksExisted ? try Data(contentsOf: codexHooksURL) : nil
-        var installed: [Provider] = []
+        var installed: [(Provider, PreviousInstall)] = []
         do {
             for provider in Provider.allCases {
-                if try install(provider) { installed.append(provider) }
+                if let previous = try install(provider) { installed.append((provider, previous)) }
             }
             try installCodexHooks()
         } catch {
-            for provider in installed.reversed() { try? restore(provider) }
+            for (provider, previous) in installed.reversed() {
+                switch previous {
+                case .originalCommand: try? restore(provider)
+                case .relayLink(let destination): try? link(provider, to: destination)
+                }
+            }
             if let previousHooks {
                 try? previousHooks.write(to: codexHooksURL, options: [.atomic])
             } else if !hooksExisted {
@@ -331,16 +337,18 @@ public struct RelayInstaller: Sendable {
     public func uninstall() throws {
         for provider in Provider.allCases {
             let live = executable(for: provider)
-            guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: live.path),
-                resolvedLink(destination, relativeTo: live) == relayExecutable.standardizedFileURL
-            else { continue }
+            let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: live.path)
+            let isCurrent = destination.map {
+                resolvedLink($0, relativeTo: live) == relayExecutable.standardizedFileURL
+            } ?? false
+            guard isCurrent || previousRelay(for: provider) != nil else { continue }
             try restore(provider)
         }
         try uninstallCodexHooks()
     }
 
     @discardableResult
-    private func install(_ provider: Provider) throws -> Bool {
+    private func install(_ provider: Provider) throws -> PreviousInstall? {
         let live = executable(for: provider)
         let backup = originalExecutable(for: provider)
         let manager = FileManager.default
@@ -349,7 +357,11 @@ public struct RelayInstaller: Sendable {
 
         if let destination = try? manager.destinationOfSymbolicLink(atPath: live.path),
             resolvedLink(destination, relativeTo: live) == relayExecutable.standardizedFileURL
-        { return false }
+        { return nil }
+        if let previous = previousRelay(for: provider) {
+            try link(provider, to: relayExecutable)
+            return .relayLink(previous)
+        }
         guard manager.fileExists(atPath: live.path) else {
             throw RelayInstallError.cliMissing(provider == .codex ? "Codex" : "Claude")
         }
@@ -363,7 +375,33 @@ public struct RelayInstaller: Sendable {
             try? manager.moveItem(at: backup, to: live)
             throw error
         }
-        return true
+        return .originalCommand
+    }
+
+    private func previousRelay(for provider: Provider) -> URL? {
+        let live = executable(for: provider)
+        guard FileManager.default.fileExists(atPath: originalExecutable(for: provider).path),
+            let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: live.path)
+        else { return nil }
+        let target = resolvedLink(destination, relativeTo: live)
+        let contents = target.deletingLastPathComponent().deletingLastPathComponent()
+        guard target.lastPathComponent == "VibecomRelay",
+            target.deletingLastPathComponent().lastPathComponent == "MacOS",
+            contents.lastPathComponent == "Contents",
+            contents.deletingLastPathComponent().lastPathComponent == "Vibecom Bar.app"
+        else { return nil }
+        return target
+    }
+
+    private func link(_ provider: Provider, to target: URL) throws {
+        let live = executable(for: provider)
+        let replacement = live.deletingLastPathComponent()
+            .appendingPathComponent(".\(live.lastPathComponent).vibecom-\(UUID().uuidString)")
+        try FileManager.default.createSymbolicLink(at: replacement, withDestinationURL: target)
+        defer { try? FileManager.default.removeItem(at: replacement) }
+        guard rename(replacement.path, live.path) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
     }
 
     private func restore(_ provider: Provider) throws {
@@ -409,12 +447,8 @@ public struct RelayInstaller: Sendable {
             ("SessionStart", "started"), ("UserPromptSubmit", "active"),
             ("Stop", "idle"), ("Interrupt", "idle"), ("SessionEnd", "idle"),
         ] {
-            var handlers = hooks[event] as? [[String: Any]] ?? []
-            let alreadyPresent = handlers.contains { handler in
-                let commands = handler["hooks"] as? [[String: Any]] ?? []
-                return commands.contains { ($0["command"] as? String)?.contains(hookMarker) == true }
-            }
-            if !alreadyPresent { handlers.append(hook(lifecycle)) }
+            var handlers = removingOurHooks(from: hooks[event] as? [[String: Any]] ?? [])
+            handlers.append(hook(lifecycle))
             hooks[event] = handlers
         }
         root["hooks"] = hooks
@@ -428,14 +462,24 @@ public struct RelayInstaller: Sendable {
         else { return }
         for (event, value) in hooks {
             guard let handlers = value as? [[String: Any]] else { continue }
-            let filtered = handlers.filter { handler in
-                let commands = handler["hooks"] as? [[String: Any]] ?? []
-                return !commands.contains { ($0["command"] as? String)?.contains(hookMarker) == true }
-            }
+            let filtered = removingOurHooks(from: handlers)
             if filtered.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = filtered }
         }
         root["hooks"] = hooks
         try writeJSON(root, to: codexHooksURL)
+    }
+
+    private func removingOurHooks(from handlers: [[String: Any]]) -> [[String: Any]] {
+        handlers.compactMap { handler in
+            guard let commands = handler["hooks"] as? [[String: Any]] else { return handler }
+            let remaining = commands.filter {
+                ($0["command"] as? String)?.contains(hookMarker) != true
+            }
+            guard !remaining.isEmpty else { return nil }
+            var updated = handler
+            updated["hooks"] = remaining
+            return updated
+        }
     }
 
     private func writeJSON(_ object: [String: Any], to url: URL) throws {
