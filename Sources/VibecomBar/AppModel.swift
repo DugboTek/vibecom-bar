@@ -32,6 +32,12 @@ final class AppModel {
     private(set) var vibecomStanding: VibecomStanding?
     /// Human-readable result of the most recent automatic account decision.
     private(set) var autoSwapActivity: String?
+    private(set) var autoSwapActivityIsFailure = false
+    /// Why the last switch, manual or automatic, did not happen. Shown on the
+    /// accounts page, where the Use button lives.
+    private(set) var switchFailure: String?
+    /// The account a Use click is currently switching to.
+    private(set) var switchingAccountID: UUID?
     private(set) var relayIsInstalled = false
     private(set) var relayStatusMessage: String?
     var page: Page = .accounts
@@ -41,8 +47,9 @@ final class AppModel {
             guard preferences != oldValue else { return }
             try? preferencesStore.save(preferences)
             if !preferences.autoSwapEnabled {
-                autoSwapAttemptedActiveIDs.removeAll()
+                autoSwapAttempts.removeAll()
                 autoSwapActivity = nil
+                autoSwapActivityIsFailure = false
             }
             restartTimer()
         }
@@ -67,9 +74,8 @@ final class AppModel {
     static let tokenInterval: Duration = .seconds(5)
     private var signInTask: Task<Void, Never>?
     private var notificationsAuthorized = false
-    /// Prevents a failed keychain write from being retried every refresh while
-    /// the same nearly-spent account remains active.
-    private var autoSwapAttemptedActiveIDs: [Provider: UUID] = [:]
+    /// Retries a failed automatic switch on a cooldown, not every refresh.
+    private var autoSwapAttempts = AutoSwapAttempts()
 
     init() {
         let support = FileManager.default
@@ -240,29 +246,17 @@ final class AppModel {
     private func autoSwapIfNeeded(_ current: [AccountStatus]) async -> [AccountStatus] {
         guard preferences.autoSwapEnabled else { return current }
 
-        // A changed or recovered active account opens a fresh decision cycle.
-        for provider in Provider.allCases {
-            guard let active = current.first(where: {
-                $0.account.provider == provider && $0.isActive
-            }) else {
-                autoSwapAttemptedActiveIDs.removeValue(forKey: provider)
-                continue
-            }
-            let isNearLimit = active.snapshot?.windows.contains {
-                $0.isExhausted || $0.usedFraction >= 0.99
-            } ?? false
-            if autoSwapAttemptedActiveIDs[provider] != active.id || !isNearLimit {
-                autoSwapAttemptedActiveIDs.removeValue(forKey: provider)
-            }
-        }
+        autoSwapAttempts.reconcile(with: current)
 
         var switched = false
         for decision in AutoSwapPlanner.decisions(in: current) {
-            guard autoSwapAttemptedActiveIDs[decision.provider] != decision.from.id else { continue }
-            autoSwapAttemptedActiveIDs[decision.provider] = decision.from.id
+            guard autoSwapAttempts.shouldAttempt(decision, now: Date()) else { continue }
+            autoSwapAttempts.record(decision, at: Date())
             do {
                 try await activator.activate(decision.to)
                 switched = true
+                switchFailure = nil
+                autoSwapActivityIsFailure = false
                 let relays = preferences.liveRelayEnabled && relayIsInstalled
                     ? relayController.queueHandoff(from: decision.from, to: decision.to) : 0
                 if relays > 0 {
@@ -277,8 +271,15 @@ final class AppModel {
                         body: "Quit the limited Codex session, then run codex resume to continue on the new account.")
                 }
             } catch {
-                autoSwapActivity =
-                    "Couldn't switch \(decision.provider.displayName): \(error.localizedDescription)"
+                let reason = Self.describeSwitchFailure(error)
+                autoSwapActivity = "Couldn't switch \(decision.provider.displayName): \(reason)"
+                autoSwapActivityIsFailure = true
+                switchFailure =
+                    "Auto swap couldn't move \(decision.provider.displayName) to \(decision.to.label): \(reason)"
+                post(
+                    id: "auto-swap-failed-\(decision.from.id.uuidString)",
+                    title: "\(decision.provider.displayName) account not switched",
+                    body: "\(decision.from.label) is nearly spent, but switching to \(decision.to.label) failed: \(reason)")
             }
         }
 
@@ -310,6 +311,10 @@ final class AppModel {
     // MARK: - Switching
 
     func activate(_ status: AccountStatus) async {
+        guard switchingAccountID == nil else { return }
+        switchingAccountID = status.id
+        switchFailure = nil
+        defer { switchingAccountID = nil }
         do {
             let source = statuses.first {
                 $0.account.provider == status.account.provider && $0.isActive
@@ -329,7 +334,27 @@ final class AppModel {
             }
             await refresh()
         } catch {
-            signInState = .failed("Couldn't switch: \(error.localizedDescription)")
+            switchFailure =
+                "Couldn't switch to \(status.account.label): \(Self.describeSwitchFailure(error))"
+        }
+    }
+
+    func dismissSwitchFailure() { switchFailure = nil }
+
+    static func describeSwitchFailure(_ error: Error) -> String {
+        switch error {
+        case VaultError.missingExternalSecret:
+            return "Claude Code isn't signed in on this Mac. Run `claude` and sign in once, then try again."
+        case VaultError.missingSecret:
+            return "This account's saved login is missing. Remove it and add it again."
+        case StoreError.securityToolTimedOut:
+            return "macOS Keychain didn't respond in time. Unlock Keychain Access and try again."
+        case StoreError.writeNotVerified:
+            return "Keychain didn't confirm the new login. Run `claude auth status` to check Claude Code is still signed in."
+        case StoreError.securityTool(let status):
+            return "macOS Keychain refused the change (security exited \(status))."
+        default:
+            return error.localizedDescription
         }
     }
 

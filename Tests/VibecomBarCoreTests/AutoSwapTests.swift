@@ -128,4 +128,67 @@ struct AutoSwapTests {
         #expect(!decision.requiresProcessRestart)
         #expect(!decision.successMessage.contains("Restart"))
     }
+
+    @Test("retries a failed switch after the cooldown instead of never")
+    func retriesFailedSwitchAfterCooldown() throws {
+        let statuses = [
+            status("spent", active: true, used: 1, resetIn: 3600),
+            status("fresh", used: 0.1, resetIn: 7200),
+        ]
+        let decision = try #require(
+            AutoSwapPlanner.decision(for: .claude, in: statuses, now: Self.now))
+        var attempts = AutoSwapAttempts()
+
+        #expect(attempts.shouldAttempt(decision, now: Self.now))
+        attempts.record(decision, at: Self.now)
+        attempts.reconcile(with: statuses)
+
+        #expect(!attempts.shouldAttempt(decision, now: Self.now.addingTimeInterval(300)))
+        #expect(attempts.shouldAttempt(
+            decision, now: Self.now.addingTimeInterval(AutoSwapAttempts.retryInterval)))
+    }
+
+    @Test("forgets an attempt once the active account changes or recovers")
+    func reconcileClearsAttempts() throws {
+        let spent = status("spent", active: true, used: 1, resetIn: 3600)
+        let fresh = status("fresh", used: 0.1, resetIn: 7200)
+        let decision = try #require(
+            AutoSwapPlanner.decision(for: .claude, in: [spent, fresh], now: Self.now))
+        let soon = Self.now.addingTimeInterval(60)
+
+        var switched = AutoSwapAttempts()
+        switched.record(decision, at: Self.now)
+        var nowActive = fresh
+        nowActive.isActive = true
+        var nowInactive = spent
+        nowInactive.isActive = false
+        switched.reconcile(with: [nowInactive, nowActive])
+        #expect(switched.shouldAttempt(decision, now: soon))
+
+        var recovered = AutoSwapAttempts()
+        recovered.record(decision, at: Self.now)
+        let reset = AccountStatus(
+            account: spent.account, snapshot: fresh.snapshot, error: nil, isActive: true)
+        recovered.reconcile(with: [reset, fresh])
+        #expect(recovered.shouldAttempt(decision, now: soon))
+    }
+
+    @Test("keeps the cooldown per provider")
+    func attemptsArePerProvider() throws {
+        let claude = try #require(AutoSwapPlanner.decision(
+            for: .claude,
+            in: [status("c-spent", active: true, used: 1, resetIn: 3600),
+                 status("c-fresh", used: 0.1, resetIn: 7200)],
+            now: Self.now))
+        let codex = try #require(AutoSwapPlanner.decision(
+            for: .codex,
+            in: [status("x-spent", provider: .codex, active: true, used: 1, resetIn: 3600),
+                 status("x-fresh", provider: .codex, used: 0.1, resetIn: 7200)],
+            now: Self.now))
+        var attempts = AutoSwapAttempts()
+        attempts.record(claude, at: Self.now)
+
+        #expect(!attempts.shouldAttempt(claude, now: Self.now))
+        #expect(attempts.shouldAttempt(codex, now: Self.now))
+    }
 }

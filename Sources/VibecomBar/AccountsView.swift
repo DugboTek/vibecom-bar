@@ -10,6 +10,10 @@ struct AccountsView: View {
                 summary: model.tokens, ticker: model.ticker, isCounting: model.isCountingTokens,
                 standing: model.vibecomStanding)
 
+            if let failure = model.switchFailure {
+                SwitchFailureBanner(message: failure) { model.dismissSwitchFailure() }
+            }
+
             if model.hasAccounts {
                 ForEach(Provider.allCases) { provider in
                     let statuses = model.statuses(for: provider)
@@ -119,10 +123,15 @@ private struct AccountRow: View {
                 }
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
+            } else if model.switchingAccountID == status.id {
+                ProgressView()
+                    .controlSize(.mini)
+                    .help("Switching \(status.account.provider.displayName) to this account…")
             } else {
                 Button("Use") { Task { await model.activate(status) } }
                     .buttonStyle(.borderless)
                     .font(.system(size: 11, weight: .semibold))
+                    .disabled(model.switchingAccountID != nil)
                     .help("Make this the account \(status.account.provider.displayName) uses next")
             }
         }
@@ -181,6 +190,7 @@ private struct AccountRow: View {
     private var menu: some View {
         if !status.isActive {
             Button("Use This Account") { Task { await model.activate(status) } }
+                .disabled(model.switchingAccountID != nil)
         }
         Button("Rename…") {
             draftName = status.account.label
@@ -188,6 +198,41 @@ private struct AccountRow: View {
         }
         Divider()
         Button("Remove", role: .destructive) { Task { await model.remove(status) } }
+    }
+}
+
+/// Why the last switch did not happen, kept on screen until dismissed.
+private struct SwitchFailureBanner: View {
+    let message: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        Card {
+            HStack(alignment: .top, spacing: 7) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .padding(.top, 1)
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                Spacer(minLength: 4)
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.tertiary)
+                .help("Dismiss")
+                .accessibilityLabel("Dismiss")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 

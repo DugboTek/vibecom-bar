@@ -56,9 +56,15 @@ struct SettingsView: View {
                 if model.preferences.autoSwapEnabled {
                     Divider().padding(.leading, 12)
                     HStack(spacing: 5) {
-                        Image(systemName: model.autoSwapActivity == nil ? "eye" : "checkmark.circle.fill")
+                        Image(
+                            systemName: model.autoSwapActivity == nil
+                                ? "eye"
+                                : model.autoSwapActivityIsFailure
+                                    ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+                        )
+                        .foregroundStyle(model.autoSwapActivityIsFailure ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                         Text(model.autoSwapActivity ?? "Watching Claude Code and Codex.")
-                            .lineLimit(2)
+                            .lineLimit(3)
                     }
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)

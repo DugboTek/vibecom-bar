@@ -33,6 +33,17 @@ every access. Therefore vibecom bar refuses to create or relabel that item. It
 only replaces the secret bytes of an existing Claude-owned item during an
 explicit account switch.
 
+That replacement goes through Apple's `/usr/bin/security` helper exactly the
+way Claude Code writes the item itself: `add-generic-password -U … -X <hex>`,
+sent over `security -i` stdin when the command fits the helper's 4 KB line and
+passed as arguments otherwise (Claude Code makes the same choice). A direct
+`SecItemUpdate` would move the item from Claude's `apple-tool:` partition to
+vibecom bar's team and make every Claude process prompt. The helper's
+interactive password prompt is never used: it keeps only 128 bytes and cannot
+accept a line longer than 1,023 bytes, while a real Claude credential with MCP
+logins is several kilobytes. After writing, vibecom bar reads the item back
+and reports a failure unless it holds exactly the bytes that were sent.
+
 Periodic refreshes determine the active Claude account from `~/.claude.json`.
 They perform zero reads of `Claude Code-credentials`. A regression test locks
 this behavior down.
