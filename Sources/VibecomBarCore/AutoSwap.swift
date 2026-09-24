@@ -39,12 +39,12 @@ public enum AutoSwapPlanner {
         for provider: Provider, in statuses: [AccountStatus], now: Date = Date()
     ) -> AutoSwapDecision? {
         let providerStatuses = statuses.filter { $0.account.provider == provider }
-        guard let active = providerStatuses.first(where: \.isActive), shouldSwap(active) else {
+        guard let active = providerStatuses.first(where: \.isActive), isNearLimit(active) else {
             return nil
         }
 
         let available = providerStatuses.filter { status in
-            !status.isActive && status.error == nil && status.snapshot != nil && !shouldSwap(status)
+            !status.isActive && status.error == nil && status.snapshot != nil && !isNearLimit(status)
         }
         guard let destination = available.min(by: { preferred($0, over: $1, now: now) }) else {
             return nil
@@ -53,7 +53,7 @@ public enum AutoSwapPlanner {
         return AutoSwapDecision(provider: provider, from: active.account, to: destination.account)
     }
 
-    private static func shouldSwap(_ status: AccountStatus) -> Bool {
+    static func isNearLimit(_ status: AccountStatus) -> Bool {
         status.snapshot?.windows.contains {
             $0.isExhausted || $0.usedFraction >= 0.99
         } ?? false
@@ -80,4 +80,45 @@ public enum AutoSwapPlanner {
     private static func nextReset(for status: AccountStatus, after now: Date) -> Date? {
         status.snapshot?.windows.compactMap(\.resetsAt).filter { $0 > now }.min()
     }
+}
+
+/// Remembers which spent account auto swap last tried to leave. A failed
+/// switch is retried after a cooldown: never retrying stranded the user on a
+/// spent account for the rest of its window, and retrying every refresh would
+/// repeat a failing keychain write.
+public struct AutoSwapAttempts: Sendable {
+    public static let retryInterval: TimeInterval = 10 * 60
+
+    private struct Attempt: Sendable {
+        let accountID: UUID
+        let at: Date
+    }
+
+    private var attempts: [Provider: Attempt] = [:]
+
+    public init() {}
+
+    /// A changed or recovered active account opens a fresh decision cycle.
+    public mutating func reconcile(with statuses: [AccountStatus]) {
+        for provider in Provider.allCases {
+            guard let attempt = attempts[provider] else { continue }
+            let active = statuses.first { $0.account.provider == provider && $0.isActive }
+            if active?.id != attempt.accountID || !(active.map(AutoSwapPlanner.isNearLimit) ?? false) {
+                attempts[provider] = nil
+            }
+        }
+    }
+
+    public func shouldAttempt(_ decision: AutoSwapDecision, now: Date) -> Bool {
+        guard let attempt = attempts[decision.provider], attempt.accountID == decision.from.id else {
+            return true
+        }
+        return now.timeIntervalSince(attempt.at) >= Self.retryInterval
+    }
+
+    public mutating func record(_ decision: AutoSwapDecision, at now: Date) {
+        attempts[decision.provider] = Attempt(accountID: decision.from.id, at: now)
+    }
+
+    public mutating func removeAll() { attempts.removeAll() }
 }

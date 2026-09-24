@@ -25,6 +25,21 @@ Do not delete arbitrary Keychain items. If the prompts continue, file a private
 security report with the app version, macOS version, and the name displayed in
 the prompt. Never attach tokens or a Keychain export.
 
+## Use or auto swap does not switch accounts
+
+A failed switch is shown in an orange banner at the top of the accounts list,
+and auto swap also posts a notification. The banner names the cause:
+
+- **Claude Code isn't signed in on this Mac** — run `claude` once and sign in,
+  so Claude Code creates its own Keychain item. vibecom bar never creates it.
+- **macOS Keychain didn't respond in time** — unlock the login keychain in
+  Keychain Access, then try again.
+- **Keychain didn't confirm the new login** — run `claude auth status` to check
+  Claude Code is still signed in before trying again.
+
+Auto swap retries a failed switch every ten minutes while the active account
+stays at or above 99%.
+
 ## Claude says "Not logged in"
 
 Run `claude auth login`, then use **Add the signed-in account** again. Avoid

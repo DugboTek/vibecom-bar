@@ -16,9 +16,7 @@ enum SecurityToolKeychain {
         guard result.exitedNormally, result.status == 0 else {
             throw StoreError.securityTool(result.status)
         }
-        var data = result.data
-        while data.last == 10 || data.last == 13 { data.removeLast() }
-        return data
+        return trimmingLineEndings(result.data)
     }
 
     struct CommandOutput {
@@ -30,7 +28,7 @@ enum SecurityToolKeychain {
     /// Drain stdout while the child runs. Waiting for exit first deadlocks once
     /// Claude's credential JSON fills the pipe (16 KB on this macOS version).
     static func captureOutput(
-        executable: String, arguments: [String], timeout: TimeInterval = 60
+        executable: String, arguments: [String], input: Data? = nil, timeout: TimeInterval = 60
     ) throws -> CommandOutput {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -38,7 +36,15 @@ enum SecurityToolKeychain {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
+        let commands = input.map { _ in Pipe() }
+        process.standardInput = commands ?? FileHandle.nullDevice
         try process.run()
+        if let commands, let input {
+            // Input is capped at one 4 KB command, well inside the pipe buffer,
+            // so this write cannot block on a helper that has not read yet.
+            try commands.fileHandleForWriting.write(contentsOf: input)
+            try commands.fileHandleForWriting.close()
+        }
         let deadline = Date().addingTimeInterval(timeout)
         let descriptor = output.fileHandleForReading.fileDescriptor
         var data = Data()
@@ -85,95 +91,83 @@ enum SecurityToolKeychain {
             exitedNormally: process.terminationReason == .exit)
     }
 
+    /// Claude Code's own ceiling for one `security -i` command line. The
+    /// helper reads commands through a 4 KB buffer and splits anything longer
+    /// into separate, broken commands.
+    static let interactiveCommandLimit = 4032
+
+    /// Writes exactly the way Claude Code writes its own item, so the item's
+    /// `apple-tool:` partition and Claude's ownership never change.
+    ///
+    /// The secret travels as hex through `-X`. It never goes through the
+    /// helper's password prompt, which keeps only the first 128 bytes and, on a
+    /// terminal line, cannot accept more than 1,023 bytes at all.
     static func replaceExisting(_ data: Data, service: String, account: String) throws {
         guard !data.isEmpty else { throw StoreError.invalidExternalSecret }
 
-        var master: Int32 = -1
-        var slave: Int32 = -1
-        guard openpty(&master, &slave, nil, nil, nil) == 0 else {
-            throw StoreError.securityTool(errno)
-        }
-        defer { close(master) }
-
-        var actions: posix_spawn_file_actions_t? = nil
-        posix_spawn_file_actions_init(&actions)
-        defer { posix_spawn_file_actions_destroy(&actions) }
-        posix_spawn_file_actions_adddup2(&actions, slave, STDIN_FILENO)
-        posix_spawn_file_actions_adddup2(&actions, slave, STDOUT_FILENO)
-        posix_spawn_file_actions_adddup2(&actions, slave, STDERR_FILENO)
-        posix_spawn_file_actions_addclose(&actions, master)
-
-        let arguments = updateArguments(service: service, account: account)
-        let storage = arguments.map { strdup($0) }
-        defer { storage.forEach { free($0) } }
-        var argv = storage + [nil]
-        var pid: pid_t = 0
-        let spawned = posix_spawn(&pid, arguments[0], &actions, nil, &argv, environ)
-        close(slave)
-        guard spawned == 0 else { throw StoreError.securityTool(spawned) }
-
-        let deadline = Date().addingTimeInterval(timeout)
-        var transcript = ""
-        var responseCount = 0
-        while Date() < deadline {
-            var descriptor = pollfd(fd: master, events: Int16(POLLIN), revents: 0)
-            let ready = poll(&descriptor, 1, 100)
-            if ready > 0, descriptor.revents & Int16(POLLIN) != 0 {
-                var buffer = [UInt8](repeating: 0, count: 512)
-                let count = Darwin.read(master, &buffer, buffer.count)
-                if count > 0 {
-                    transcript += String(decoding: buffer.prefix(count), as: UTF8.self)
-                    let needed = requiredResponses(in: transcript)
-                    while responseCount < needed {
-                        try write(data + Data([13]), to: master)
-                        responseCount += 1
-                    }
-                }
-            }
-
-            var status: Int32 = 0
-            if waitpid(pid, &status, WNOHANG) == pid {
-                let exitedNormally = (status & 0x7f) == 0
-                let exitCode = (status >> 8) & 0xff
-                guard exitedNormally, exitCode == 0 else {
-                    throw StoreError.securityTool(exitCode)
-                }
-                return
-            }
+        let invocation = updateInvocation(data, service: service, account: account)
+        let result = try captureOutput(
+            executable: invocation.arguments[0],
+            arguments: Array(invocation.arguments.dropFirst()),
+            input: invocation.input,
+            timeout: timeout)
+        guard result.exitedNormally, result.status == 0 else {
+            throw StoreError.securityTool(result.status)
         }
 
-        kill(pid, SIGKILL)
-        var status: Int32 = 0
-        waitpid(pid, &status, 0)
-        throw StoreError.securityToolTimedOut
-    }
-
-    static func updateArguments(service: String, account: String) -> [String] {
-        [
-            "/usr/bin/security", "add-generic-password", "-U", "-a", account,
-            "-s", service, "-w",
-        ]
-    }
-
-    static func requiredResponses(in transcript: String) -> Int {
-        let prompts = [
-            "password data for new item:",
-            "retype password for new item:",
-            "password data for item:",
-        ]
-        return prompts.reduce(0) { count, prompt in
-            count + transcript.components(separatedBy: prompt).count - 1
+        // A write that reports success but stores different bytes would sign
+        // Claude Code out. Confirm the item now holds exactly what was sent.
+        guard let stored = try read(service: service, account: account),
+            holds(stored, data)
+        else {
+            throw StoreError.writeNotVerified
         }
     }
 
-    private static func write(_ data: Data, to file: Int32) throws {
-        var offset = 0
-        while offset < data.count {
-            let written = data.withUnsafeBytes { raw in
-                Darwin.write(file, raw.baseAddress!.advanced(by: offset), data.count - offset)
-            }
-            guard written > 0 else { throw StoreError.securityTool(errno) }
-            offset += written
+    /// `find-generic-password -w` prints a secret it cannot show as text in hex.
+    static func holds(_ printed: Data, _ secret: Data) -> Bool {
+        printed == trimmingLineEndings(secret) || printed == Data(hex(secret).utf8)
+    }
+
+    private static func hex(_ data: Data) -> String {
+        data.map { String(format: "%02x", $0) }.joined()
+    }
+
+    struct UpdateInvocation: Equatable {
+        let arguments: [String]
+        /// Commands for `security -i`; nil when everything is in `arguments`.
+        let input: Data?
+    }
+
+    /// Mirrors Claude Code: the command goes over stdin when it fits, keeping
+    /// the secret out of the process list. Larger payloads fall back to
+    /// arguments, as Claude Code itself does for the same item.
+    static func updateInvocation(_ data: Data, service: String, account: String)
+        -> UpdateInvocation
+    {
+        let hex = hex(data)
+        let command = "add-generic-password -U -a \"\(account)\" -s \"\(service)\" -X \"\(hex)\" "
+        if command.utf8.count <= interactiveCommandLimit,
+            isSafelyQuotable(account), isSafelyQuotable(service)
+        {
+            return UpdateInvocation(
+                arguments: ["/usr/bin/security", "-i"], input: Data((command + "\n").utf8))
         }
+        return UpdateInvocation(
+            arguments: [
+                "/usr/bin/security", "add-generic-password", "-U", "-a", account,
+                "-s", service, "-X", hex,
+            ],
+            input: nil)
+    }
+
+    private static func isSafelyQuotable(_ value: String) -> Bool {
+        !value.contains { $0 == "\"" || $0 == "\\" || $0.isNewline }
+    }
+
+    private static func trimmingLineEndings(_ data: Data) -> Data {
+        var data = data
+        while data.last == 10 || data.last == 13 { data.removeLast() }
+        return data
     }
 }

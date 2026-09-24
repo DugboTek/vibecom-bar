@@ -6,6 +6,8 @@ public enum StoreError: Error, Equatable {
     case securityTool(Int32)
     case securityToolTimedOut
     case invalidExternalSecret
+    /// The helper reported success but the item does not hold what was sent.
+    case writeNotVerified
 }
 
 /// Account tokens live in the login keychain, never in a file this app writes.
