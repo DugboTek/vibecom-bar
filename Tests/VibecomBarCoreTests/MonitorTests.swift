@@ -109,7 +109,8 @@ struct AccountMonitorTests {
         let written = try #require(secrets.contents(of: ClaudeKeychain.service))
         #expect(try ClaudeCredentials(keychainJSON: written).accessToken == "at-stale")
         #expect(secrets.reads(of: ClaudeKeychain.service) == 0)
-        #expect(status.error == .needsLogin)
+        // Claude Code renews its own login; "Sign in again" would be wrong here.
+        #expect(status.error == .awaitingCLIRenewal)
         #expect(http.sent.isEmpty)
     }
 

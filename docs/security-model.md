@@ -44,9 +44,26 @@ accept a line longer than 1,023 bytes, while a real Claude credential with MCP
 logins is several kilobytes. After writing, vibecom bar reads the item back
 and reports a failure unless it holds exactly the bytes that were sent.
 
-Periodic refreshes determine the active Claude account from `~/.claude.json`.
-They perform zero reads of `Claude Code-credentials`. A regression test locks
-this behavior down.
+Periodic refreshes never read `Claude Code-credentials` through the Keychain
+API, which is what once produced repeated password prompts. They read it once
+per refresh through `/usr/bin/security`, the helper Claude's item already
+trusts, to keep saved logins current (see below). Regression tests lock both
+behaviors down.
+
+## Keeping saved logins current
+
+Claude Code and Codex rotate refresh tokens whenever they renew a login, so a
+saved copy goes stale as soon as its account is used. On every refresh and
+before every switch, vibecom bar reads the login each CLI is using, works out
+which saved account it belongs to, and saves the rotated tokens into that
+account's Keychain item. Ownership comes from the tokens, or the provider's
+profile endpoint for a token it has not seen, never from `~/.claude.json`. A
+login it cannot identify is never saved under any account.
+
+Before switching, the incoming account's saved login is renewed. That proves
+its refresh token still works. If the provider says the login is dead, the
+switch stops before anything the CLI uses is touched, and the account asks to
+be signed in again.
 
 ## Token renewal
 

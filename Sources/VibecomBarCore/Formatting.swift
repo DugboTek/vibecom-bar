@@ -163,7 +163,7 @@ public enum MenuBarTitle {
         if let error = status.error {
             switch error {
             case .needsLogin, .cannotReadUsage: return "\(mark) sign in"
-            case .rateLimited, .unreachable:
+            case .rateLimited, .unreachable, .awaitingCLIRenewal:
                 guard let headline = status.headline else { return "\(mark) —" }
                 return "\(mark) \(UsageFormatter.percent(headline.usedFraction))"
             }

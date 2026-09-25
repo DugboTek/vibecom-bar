@@ -21,6 +21,19 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
   doing nothing, and a failed auto swap posts a notification.
 - Auto swap retries a failed switch every ten minutes instead of giving up
   until the spent account reset.
+- Switching back to an account that had been in use signed Claude Code out
+  ("Login expired"). Claude Code and Codex rotate refresh tokens as they
+  renew, and the saved copy was never updated. vibecom bar now saves the
+  rotated tokens into the right account on every refresh and before every
+  switch, and renews the incoming login first, refusing the switch if it is
+  dead instead of handing the CLI a broken login.
+- Auto swap never fired. The active account's usage was read with its stale
+  saved token, which failed once that token expired, so the 99% mark was
+  never seen. For Codex, the active account was matched by exact token and was
+  lost as soon as Codex renewed. Both now use the CLI's live login.
+- Usage is checked every minute while an active account is above 90%.
+- The active account no longer says "Sign in again" when only the CLI's own
+  idle token has lapsed.
 
 ## [1.0.0] - Unreleased
 

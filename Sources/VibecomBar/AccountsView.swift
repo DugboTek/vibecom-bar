@@ -155,7 +155,9 @@ private struct AccountRow: View {
     private var isSpent: Bool { status.snapshot?.windows.contains(where: \.isExhausted) ?? false }
 
     private var staleNote: String? {
-        guard let error = status.error, error == .rateLimited || error == .unreachable else { return nil }
+        guard let error = status.error,
+            error == .rateLimited || error == .unreachable || error == .awaitingCLIRenewal
+        else { return nil }
         return error.message
     }
 

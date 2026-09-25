@@ -7,6 +7,9 @@ public enum AccountError: Error, Equatable, Sendable {
     case cannotReadUsage
     case rateLimited
     case unreachable
+    /// The CLI's own token has lapsed while it sat unused. The CLI renews it on
+    /// its next request; renewing it here would sign the CLI out.
+    case awaitingCLIRenewal
 
     public var message: String {
         switch self {
@@ -14,6 +17,7 @@ public enum AccountError: Error, Equatable, Sendable {
         case .cannotReadUsage: "This login can't read usage"
         case .rateLimited: "Rate limited — retrying"
         case .unreachable: "Couldn't reach the provider"
+        case .awaitingCLIRenewal: "Updates when the CLI is next used"
         }
     }
 }
@@ -39,6 +43,21 @@ public struct AccountStatus: Equatable, Sendable, Identifiable {
     public var headline: UsageWindow? { snapshot?.headline }
 }
 
+/// Whose login a CLI is using right now.
+public enum LiveLoginOwner: Equatable, Sendable {
+    case account(UUID)
+    /// Signed in as an account that is not saved in vibecom bar.
+    case someoneElse
+    case signedOut
+    /// The live login could not be read or identified this time.
+    case unknown
+}
+
+public enum SwitchError: Error, Equatable {
+    /// The saved login was revoked or rotated away; only a new sign-in fixes it.
+    case savedLoginExpired
+}
+
 /// Keeps every stored account's usage current and holds on to the last good
 /// reading when a provider is unreachable. An active Claude login is never
 /// renewed here: Claude refresh tokens rotate, and rotating one before a
@@ -52,6 +71,9 @@ public actor AccountMonitor {
     private let now: @Sendable () -> Date
 
     private var lastGood: [UUID: UsageSnapshot] = [:]
+    /// Who owns the last live Claude access token seen, so the profile lookup
+    /// runs once per token rather than once per refresh.
+    private var claudeProfileCache: (accessToken: String, identity: AccountIdentity)?
 
     public init(
         vault: AccountVault,
@@ -74,7 +96,14 @@ public actor AccountMonitor {
         // Which login each CLI holds is checked once per provider, not once per account.
         var active: [Provider: UUID] = [:]
         for provider in Set(accounts.map(\.provider)) {
-            active[provider] = (try? await activator.activeAccountID(for: provider)) ?? nil
+            switch await syncLiveLogin(for: provider) {
+            case .account(let id):
+                active[provider] = id
+            case .someoneElse, .signedOut:
+                active[provider] = nil
+            case .unknown:
+                active[provider] = (try? await activator.activeAccountID(for: provider)) ?? nil
+            }
         }
 
         var statuses: [AccountStatus] = []
@@ -116,6 +145,161 @@ public actor AccountMonitor {
         }
     }
 
+    // MARK: - Live logins
+
+    /// Reads the login a CLI is using right now, works out which saved account
+    /// it belongs to, and saves any tokens the CLI has rotated since into that
+    /// account. Claude Code and Codex rotate refresh tokens whenever they renew,
+    /// so without this a saved copy goes stale as soon as its account is used,
+    /// and switching back to it hands the CLI a dead login.
+    ///
+    /// Ownership comes from the tokens themselves, never from `~/.claude.json`,
+    /// which a running Claude process can rewrite with the account it started on.
+    @discardableResult
+    public func syncLiveLogin(for provider: Provider) async -> LiveLoginOwner {
+        guard let accounts = try? await vault.accounts(for: provider), !accounts.isEmpty else {
+            return .unknown
+        }
+        switch provider {
+        case .claude: return await syncLiveClaude(accounts)
+        case .codex: return await syncLiveCodex(accounts)
+        }
+    }
+
+    private func syncLiveClaude(_ accounts: [StoredAccount]) async -> LiveLoginOwner {
+        // Through Apple's security helper, which Claude's item already trusts,
+        // so this cannot put a password prompt on screen.
+        let data: Data
+        do {
+            guard let found = try environment.secrets.readExternal(service: ClaudeKeychain.service) else {
+                return .signedOut
+            }
+            data = found
+        } catch {
+            return .unknown
+        }
+        guard let live = try? ClaudeCredentials(keychainJSON: data) else { return .unknown }
+
+        var saved: [UUID: ClaudeCredentials] = [:]
+        for account in accounts {
+            if case .claude(let credentials) = try? await vault.secret(for: account.id) {
+                saved[account.id] = credentials
+            }
+        }
+
+        var owner = accounts.first { account in
+            guard let credentials = saved[account.id] else { return false }
+            return credentials.accessToken == live.accessToken
+                || (credentials.refreshToken != nil && credentials.refreshToken == live.refreshToken)
+        }
+        if owner == nil {
+            guard let identity = await claudeIdentity(of: live) else { return .unknown }
+            owner = accounts.first { Self.isSameAccount($0.identity, identity) }
+        }
+        guard let owner else { return .someoneElse }
+
+        if saved[owner.id] != live {
+            try? await vault.update(secret: .claude(live), for: owner.id)
+        }
+        return .account(owner.id)
+    }
+
+    private func claudeIdentity(of live: ClaudeCredentials) async -> AccountIdentity? {
+        if let cached = claudeProfileCache, cached.accessToken == live.accessToken {
+            return cached.identity
+        }
+        guard let identity = try? await usage.fetchProfile(claude: live) else { return nil }
+        claudeProfileCache = (live.accessToken, identity)
+        return identity
+    }
+
+    private func syncLiveCodex(_ accounts: [StoredAccount]) async -> LiveLoginOwner {
+        let data: Data
+        do {
+            guard let found = try environment.files.read(environment.codexAuthFile) else {
+                return .signedOut
+            }
+            data = found
+        } catch {
+            return .unknown
+        }
+        guard let live = try? CodexCredentials(authFileJSON: data) else { return .unknown }
+
+        var saved: [UUID: CodexCredentials] = [:]
+        for account in accounts {
+            if case .codex(let credentials) = try? await vault.secret(for: account.id) {
+                saved[account.id] = credentials
+            }
+        }
+
+        var owner = accounts.first { account in
+            guard let credentials = saved[account.id] else { return false }
+            return credentials.accessToken == live.accessToken
+                || credentials.refreshToken == live.refreshToken
+        }
+        if owner == nil {
+            // Codex's ID token names its account, so no network call is needed.
+            guard let identity = live.identity else { return .unknown }
+            owner = accounts.first { Self.isSameAccount($0.identity, identity) }
+        }
+        guard let owner else { return .someoneElse }
+
+        if saved[owner.id] != live {
+            try? await vault.update(secret: .codex(live), for: owner.id)
+        }
+        return .account(owner.id)
+    }
+
+    /// Account IDs can be shared by everyone in a workspace, so when both sides
+    /// name a person the emails must agree too.
+    static func isSameAccount(_ saved: AccountIdentity, _ live: AccountIdentity) -> Bool {
+        let savedEmail = saved.email?.lowercased()
+        let liveEmail = live.email?.lowercased()
+        if let savedEmail, let liveEmail, savedEmail != liveEmail { return false }
+        if let savedID = saved.accountUUID, let liveID = live.accountUUID {
+            return savedID.lowercased() == liveID.lowercased()
+        }
+        return savedEmail != nil && savedEmail == liveEmail
+    }
+
+    // MARK: - Switching
+
+    /// Switches a CLI to a saved account without ever handing it a dead login.
+    ///
+    /// First the outgoing account's rotated tokens are saved, so switching back
+    /// later works. Then the incoming login is renewed: that proves its refresh
+    /// token is still alive before anything the CLI uses is touched.
+    public func activate(_ account: StoredAccount) async throws {
+        let owner = await syncLiveLogin(for: account.provider)
+        if owner != .account(account.id) {
+            try await prepareForHandoff(account)
+        }
+        try await activator.activate(account)
+        if account.provider == .claude { claudeProfileCache = nil }
+    }
+
+    private func prepareForHandoff(_ account: StoredAccount) async throws {
+        let secret = try await vault.secret(for: account.id)
+        do {
+            // Only vibecom bar holds an inactive account's tokens, so rotating
+            // them here cannot sign anything else out.
+            _ = try await renewIfNeeded(secret, for: account, force: true, isActive: false)
+        } catch OAuthError.needsReauthentication {
+            throw SwitchError.savedLoginExpired
+        } catch {
+            // Offline or rate limited: a token that is still valid can go ahead,
+            // and the CLI renews it itself later. An expired one cannot.
+            if Self.isExpired(secret, now: now()) { throw error }
+        }
+    }
+
+    private static func isExpired(_ secret: AccountSecret, now: Date) -> Bool {
+        switch secret {
+        case .claude(let credentials): credentials.isExpired(at: now)
+        case .codex(let credentials): isCodexTokenExpired(credentials, now: now)
+        }
+    }
+
     /// Fills in who a Claude account belongs to when it was saved without an
     /// email. Best effort: a failure leaves the account as it was.
     private func named(_ account: StoredAccount, using secret: AccountSecret) async -> StoredAccount {
@@ -153,7 +337,7 @@ public actor AccountMonitor {
             // Never touch the live Claude keychain item from a periodic
             // refresh. Even a read can display a password dialog, and retrying
             // it on a timer creates a prompt storm.
-            guard !isActive else { throw AccountError.needsLogin }
+            guard !isActive else { throw AccountError.awaitingCLIRenewal }
             guard let refreshToken = credentials.refreshToken else { throw AccountError.needsLogin }
             let (data, response) = try await http.send(
                 OAuthRefresher.claudeRequest(refreshToken: refreshToken))
