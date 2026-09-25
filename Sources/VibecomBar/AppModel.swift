@@ -151,16 +151,29 @@ final class AppModel {
         }
     }
 
+    /// While an active account is close to a limit, usage is read this often,
+    /// so auto swap acts within a minute rather than a full refresh interval.
+    static let nearLimitInterval: TimeInterval = 60
+
     private func restartTimer() {
         timerTask?.cancel()
-        let interval = preferences.refreshInterval
         timerTask = Task { [weak self] in
             while !Task.isCancelled {
+                let interval = self?.nextRefreshDelay() ?? 300
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { return }
                 await self?.refresh()
             }
         }
+    }
+
+    private func nextRefreshDelay() -> TimeInterval {
+        let interval = TimeInterval(preferences.refreshInterval)
+        let nearLimit = statuses.contains { status in
+            status.isActive && (status.snapshot?.windows.contains { $0.usedFraction >= 0.9 } ?? false)
+        }
+        return preferences.autoSwapEnabled && nearLimit
+            ? min(interval, Self.nearLimitInterval) : interval
     }
 
     /// Sample accounts for layout snapshots, so rendering the UI never touches
@@ -253,7 +266,7 @@ final class AppModel {
             guard autoSwapAttempts.shouldAttempt(decision, now: Date()) else { continue }
             autoSwapAttempts.record(decision, at: Date())
             do {
-                try await activator.activate(decision.to)
+                try await monitor.activate(decision.to)
                 switched = true
                 switchFailure = nil
                 autoSwapActivityIsFailure = false
@@ -319,7 +332,7 @@ final class AppModel {
             let source = statuses.first {
                 $0.account.provider == status.account.provider && $0.isActive
             }?.account
-            try await activator.activate(status.account)
+            try await monitor.activate(status.account)
             let relays = preferences.liveRelayEnabled && relayIsInstalled
                 ? relayController.queueHandoff(from: source, to: status.account) : 0
             if relays > 0 {
@@ -343,6 +356,10 @@ final class AppModel {
 
     static func describeSwitchFailure(_ error: Error) -> String {
         switch error {
+        case SwitchError.savedLoginExpired:
+            return "Its saved login has expired. Sign in to it again from Add Account; the account in use was left alone."
+        case is UsageError, is URLError:
+            return "Couldn't reach the provider to check the saved login. Try again when you're online."
         case VaultError.missingExternalSecret:
             return "Claude Code isn't signed in on this Mac. Run `claude` and sign in once, then try again."
         case VaultError.missingSecret:

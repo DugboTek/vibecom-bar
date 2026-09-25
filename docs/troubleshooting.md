@@ -2,7 +2,9 @@
 
 ## Repeating Keychain prompts
 
-Routine refreshes should never request Claude's live Keychain credential.
+Routine refreshes read Claude's live Keychain credential only through Apple's
+`/usr/bin/security` helper, which Claude's item already trusts, so they should
+never cause a prompt.
 
 1. Quit vibecom bar from its power button.
 2. Confirm the prompts stop.
@@ -36,9 +38,12 @@ and auto swap also posts a notification. The banner names the cause:
   Keychain Access, then try again.
 - **Keychain didn't confirm the new login** — run `claude auth status` to check
   Claude Code is still signed in before trying again.
+- **Its saved login has expired** — the account was signed in elsewhere or
+  its tokens were rotated before vibecom bar could save them. Sign in to it again
+  from **Add Account**. The account in use is left alone.
 
-Auto swap retries a failed switch every ten minutes while the active account
-stays at or above 99%.
+Auto swap checks usage every minute once the active account passes 90%, and
+retries a failed switch every ten minutes while it stays at or above 99%.
 
 ## Claude says "Not logged in"
 
