@@ -71,6 +71,7 @@ struct RootView: View {
         .frame(width: 356)
         .tint(Color(brand.accent))
         .environment(\.brand, brand)
+        .environment(\.popoverIsShown, model.isPopoverShown)
         .animation(reduceMotion ? nil : Motion.state, value: model.page)
     }
 

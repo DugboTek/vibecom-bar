@@ -238,11 +238,13 @@ public actor TokenLedger {
             mark = Date()
         }
         let cutoff = now.addingTimeInterval(-lookback)
+        var walked = false
         if lastWalk.map({ now.timeIntervalSince($0) >= Self.walkInterval || now < $0 }) ?? true {
             known = [:]
             walk(root: claudeRoot, tool: .claudeCode)
             walk(root: codexRoot, tool: .codex)
             lastWalk = now
+            walked = true
         }
         let pending = known.compactMap { path, tool in changedFile(path: path, tool: tool, cutoff: cutoff) }
         lap("enumerate (\(pending.count) changed)")
@@ -272,7 +274,12 @@ public actor TokenLedger {
         }
         lap("read+merge (\(claudeMessages.count) claude, \(codexEvents.count) codex)")
 
-        prune(before: cutoff)
+        // Copying a week of events to drop the few that aged out cost more
+        // than the rest of an update, so it happens once a walk, not every tick.
+        if walked {
+            prune(before: cutoff)
+            forgetFiles(olderThan: cutoff)
+        }
         lap("prune")
         let summary = summarize(now: now)
         lap("summarize")
@@ -371,6 +378,12 @@ public actor TokenLedger {
         return state
     }
 
+    /// Read positions for transcripts that aged out of the window; the
+    /// dictionary otherwise grows with every session ever started.
+    private func forgetFiles(olderThan cutoff: Date) {
+        files = files.filter { $0.value.modified >= cutoff }
+    }
+
     private func prune(before cutoff: Date) {
         claudeMessages = claudeMessages.filter { $0.value.timestamp >= cutoff }
         codexEvents.removeAll { $0.timestamp < cutoff }
@@ -384,14 +397,14 @@ public actor TokenLedger {
         var models: [String: TokenTotals] = [:]
         var liveTokens = 0
 
-        for event in Array(claudeMessages.values) + codexEvents {
-            guard event.timestamp <= now else { continue }
+        func include(_ event: TokenEvent) {
+            guard event.timestamp <= now else { return }
             if event.timestamp >= weekStart { summary.week.add(event) }
             if event.timestamp >= liveStart { liveTokens += event.usage.total }
             if summary.lastActivity.map({ event.timestamp > $0 }) ?? true {
                 summary.lastActivity = event.timestamp
             }
-            guard event.timestamp >= startOfDay else { continue }
+            guard event.timestamp >= startOfDay else { return }
 
             summary.today.add(event)
             summary.byTool[event.tool, default: TokenTotals()].add(event)
@@ -399,6 +412,9 @@ public actor TokenLedger {
             let hour = calendar.component(.hour, from: event.timestamp)
             summary.hourly[hour] += event.usage.total
         }
+        // Iterated in place: concatenating them copied every event each tick.
+        for event in claudeMessages.values { include(event) }
+        for event in codexEvents { include(event) }
 
         summary.tokensPerMinute = liveTokens / Int(TokenSummary.liveWindow / 60)
         summary.topModels = models

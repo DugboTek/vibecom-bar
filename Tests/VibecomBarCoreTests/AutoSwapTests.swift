@@ -78,15 +78,63 @@ struct AutoSwapTests {
         #expect(AutoSwapPlanner.decision(for: .claude, in: statuses, now: Self.now) == nil)
     }
 
-    @Test("never switches to another spent or unhealthy account")
+    @Test("never switches to another spent account or one that needs signing in")
     func requiresHealthyCapacity() {
         let statuses = [
             status("active", active: true, used: 1, resetIn: 3600),
             status("spent", used: 1, resetIn: 1800),
-            status("offline", used: 0, resetIn: 900, error: .unreachable),
+            status("signed out", used: 0, resetIn: 900, error: .needsLogin),
+            status("no scope", used: 0, resetIn: 900, error: .cannotReadUsage),
         ]
 
         #expect(AutoSwapPlanner.decision(for: .claude, in: statuses, now: Self.now) == nil)
+    }
+
+    @Test("still switches to an account whose last reading was rate limited")
+    func toleratesTransientErrors() throws {
+        for error in [AccountError.rateLimited, .unreachable] {
+            let statuses = [
+                status("active", active: true, used: 1, resetIn: 3600),
+                status("throttled", used: 0.1, resetIn: 900, error: error),
+            ]
+            let decision = try #require(
+                AutoSwapPlanner.decision(for: .claude, in: statuses, now: Self.now))
+            #expect(decision.to.label == "throttled")
+        }
+    }
+
+    @Test("explains why it is not switching")
+    func explainsDecisions() {
+        let waiting = [status("main", active: true, used: 0.63, resetIn: 3600)]
+        #expect(AutoSwapPlanner.explanation(for: .claude, in: waiting, now: Self.now)
+            == "Claude Code: main is at 63%; switches at 99%.")
+
+        let stuck = [
+            status("main", active: true, used: 1, resetIn: 3600),
+            status("other", used: 1, resetIn: 900),
+            status("old", used: 0, resetIn: 900, error: .needsLogin),
+        ]
+        #expect(AutoSwapPlanner.explanation(for: .claude, in: stuck, now: Self.now)
+            == "Claude Code: main is spent, but no other account is ready (other — also spent; old — sign in again).")
+
+        let going = [
+            status("main", active: true, used: 1, resetIn: 3600),
+            status("fresh", used: 0, resetIn: 900),
+        ]
+        #expect(AutoSwapPlanner.explanation(for: .claude, in: going, now: Self.now)
+            == "Claude Code: main is spent; switching to fresh.")
+
+        let nobody = [status("main", used: 0.2, resetIn: 900)]
+        #expect(AutoSwapPlanner.explanation(for: .claude, in: nobody, now: Self.now)?
+            .contains("none of your saved accounts is the one signed in") == true)
+        #expect(AutoSwapPlanner.explanation(for: .codex, in: nobody, now: Self.now) == nil)
+    }
+
+    @Test("describes each account for the activity log without any token")
+    func logLines() {
+        let line = AutoSwapPlanner.logLine(
+            for: status("main", active: true, used: 0.5, resetIn: 60, error: .rateLimited))
+        #expect(line == "Claude Code main | ACTIVE | Weekly 50% | error: Rate limited — retrying")
     }
 
     @Test("plans Claude and Codex independently")

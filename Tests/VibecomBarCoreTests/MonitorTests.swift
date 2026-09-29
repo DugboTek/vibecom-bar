@@ -167,10 +167,10 @@ struct AccountMonitorTests {
 
     @Test("keeps the last good reading on screen when a refresh fails")
     func keepsLastGoodSnapshot() async throws {
-        let (monitor, vault, _, _, _) = fixture(responses: [
-            (Data(Self.usageJSON.utf8), 200),
-            (Data("nope".utf8), 500),
-        ])
+        // Active, so it is read on every refresh rather than throttled.
+        let (monitor, vault, _, _, _) = fixture(
+            responses: [(Data(Self.usageJSON.utf8), 200), (Data("nope".utf8), 500)],
+            signedIn: "one@example.com")
         let account = try await vault.add(
             provider: .claude, identity: AccountIdentity(email: "one@example.com"),
             secret: .claude(
@@ -287,5 +287,46 @@ struct RenewOnDemandTests {
         await #expect(throws: OAuthError.needsReauthentication) {
             try await monitor.renewCredentials(for: account)
         }
+    }
+}
+
+@Suite("Usage read pacing")
+struct UsagePacingTests {
+    final class Clock: @unchecked Sendable {
+        var now = Date(timeIntervalSince1970: 1_789_830_000)
+    }
+
+    @Test("reads an account not in use at most every few minutes, so polling near a limit is not rate limited")
+    func throttlesInactiveReads() async throws {
+        let secrets = MemorySecretStore()
+        let files = MemoryFileStore()
+        let vault = AccountVault(secrets: secrets, files: files, directory: URL(fileURLWithPath: "/vault"))
+        let environment = CLIEnvironment(
+            secrets: secrets, files: files,
+            claudeConfigFile: URL(fileURLWithPath: "/home/.claude.json"),
+            codexAuthFile: URL(fileURLWithPath: "/home/.codex/auth.json"))
+        let usage = (Data(AccountMonitorTests.usageJSON.utf8), 200)
+        let http = StubHTTPClient(responses: [usage, usage])
+        let clock = Clock()
+        let monitor = AccountMonitor(
+            vault: vault, activator: AccountActivator(vault: vault, environment: environment),
+            environment: environment, http: http, usage: UsageService(http: http),
+            now: { clock.now })
+        let account = try await vault.add(
+            provider: .claude, identity: AccountIdentity(email: "idle@example.com"),
+            secret: .claude(ClaudeCredentials(
+                accessToken: "at", refreshToken: "rt",
+                expiresAt: clock.now.addingTimeInterval(86_400), scopes: ["user:profile"])))
+
+        _ = await monitor.refresh(account)
+        clock.now = clock.now.addingTimeInterval(60)
+        let cached = await monitor.refresh(account)
+        #expect(http.sent.count == 1)
+        #expect(cached.snapshot != nil)
+        #expect(cached.error == nil)
+
+        clock.now = clock.now.addingTimeInterval(AccountMonitor.inactiveRefreshInterval)
+        _ = await monitor.refresh(account)
+        #expect(http.sent.count == 2)
     }
 }

@@ -33,11 +33,18 @@ final class AppModel {
     /// Human-readable result of the most recent automatic account decision.
     private(set) var autoSwapActivity: String?
     private(set) var autoSwapActivityIsFailure = false
+    /// Why auto swap is or is not switching each provider right now.
+    private(set) var autoSwapExplanations: [String] = []
+    /// Everything auto swap saw and did, for explaining a switch that did not happen.
+    let activityLog = ActivityLog()
     /// Why the last switch, manual or automatic, did not happen. Shown on the
     /// accounts page, where the Use button lives.
     private(set) var switchFailure: String?
     /// The account a Use click is currently switching to.
     private(set) var switchingAccountID: UUID?
+    /// Whether the popover is on screen. Token counting slows down and the
+    /// ticker stops animating while it is not.
+    private(set) var isPopoverShown = false
     private(set) var relayIsInstalled = false
     private(set) var relayStatusMessage: String?
     var page: Page = .accounts
@@ -46,6 +53,7 @@ final class AppModel {
         didSet {
             guard preferences != oldValue else { return }
             try? preferencesStore.save(preferences)
+            updateAppNapExemption()
             if !preferences.autoSwapEnabled {
                 autoSwapAttempts.removeAll()
                 autoSwapActivity = nil
@@ -70,12 +78,17 @@ final class AppModel {
     private var timerTask: Task<Void, Never>?
     private var tokenTask: Task<Void, Never>?
     private let ledger = TokenLedger()
-    /// Transcripts are re-checked this often; an update costs a few milliseconds.
-    static let tokenInterval: Duration = .seconds(5)
+    /// Transcripts are re-checked this often while the count is on screen.
+    static let tokenInterval: TimeInterval = 5
+    /// And this often while nothing shows it, which is most of the time.
+    static let backgroundTokenInterval: TimeInterval = 60
     private var signInTask: Task<Void, Never>?
     private var notificationsAuthorized = false
     /// Retries a failed automatic switch on a cooldown, not every refresh.
     private var autoSwapAttempts = AutoSwapAttempts()
+    /// Keeps App Nap from stretching the refresh timer while auto swap is on;
+    /// a napping menu bar app can otherwise go many minutes between checks.
+    private var autoSwapActivityToken: NSObjectProtocol?
 
     init() {
         let support = FileManager.default
@@ -127,6 +140,7 @@ final class AppModel {
     func start() {
         guard !started else { return }
         started = true
+        updateAppNapExemption()
         Task {
             await requestNotificationPermission()
             await refresh()
@@ -146,7 +160,8 @@ final class AppModel {
                     self?.tokens = summary
                     self?.isCountingTokens = false
                 }
-                try? await Task.sleep(for: Self.tokenInterval)
+                let interval = await MainActor.run { self?.tokenFeedInterval } ?? Self.backgroundTokenInterval
+                try? await Task.sleep(for: .seconds(interval))
             }
         }
     }
@@ -154,6 +169,29 @@ final class AppModel {
     /// While an active account is close to a limit, usage is read this often,
     /// so auto swap acts within a minute rather than a full refresh interval.
     static let nearLimitInterval: TimeInterval = 60
+
+    private var tokenFeedInterval: TimeInterval {
+        isPopoverShown || preferences.menuBarStyle == .tokensToday
+            ? Self.tokenInterval : Self.backgroundTokenInterval
+    }
+
+    private func updateAppNapExemption() {
+        if preferences.autoSwapEnabled, autoSwapActivityToken == nil {
+            autoSwapActivityToken = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiatedAllowingIdleSystemSleep],
+                reason: "Auto swap watches account limits")
+        } else if !preferences.autoSwapEnabled, let token = autoSwapActivityToken {
+            ProcessInfo.processInfo.endActivity(token)
+            autoSwapActivityToken = nil
+        }
+    }
+
+    func setPopoverShown(_ shown: Bool) {
+        guard shown != isPopoverShown else { return }
+        isPopoverShown = shown
+        // Opening shows a fresh count at once instead of up to a minute old.
+        if shown { startTokenFeed() }
+    }
 
     private func restartTimer() {
         timerTask?.cancel()
@@ -257,19 +295,38 @@ final class AppModel {
     }
 
     private func autoSwapIfNeeded(_ current: [AccountStatus]) async -> [AccountStatus] {
-        guard preferences.autoSwapEnabled else { return current }
+        let owners = await monitor.lastLiveOwners
+        for status in current { activityLog.record(AutoSwapPlanner.logLine(for: status)) }
+        for (provider, owner) in owners.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+            activityLog.record("\(provider.displayName) live login: \(describe(owner, in: current))")
+        }
+        autoSwapExplanations = Provider.allCases.compactMap {
+            AutoSwapPlanner.explanation(for: $0, in: current)
+        }
+        guard preferences.autoSwapEnabled else {
+            activityLog.record("Auto swap is off.")
+            return current
+        }
+        for explanation in autoSwapExplanations { activityLog.record(explanation) }
 
         autoSwapAttempts.reconcile(with: current)
 
         var switched = false
         for decision in AutoSwapPlanner.decisions(in: current) {
-            guard autoSwapAttempts.shouldAttempt(decision, now: Date()) else { continue }
+            guard autoSwapAttempts.shouldAttempt(decision, now: Date()) else {
+                activityLog.record(
+                    "\(decision.provider.displayName): waiting to retry the failed switch to \(decision.to.label).")
+                continue
+            }
             autoSwapAttempts.record(decision, at: Date())
+            activityLog.record(
+                "Auto swap: \(decision.provider.displayName) \(decision.from.label) → \(decision.to.label)")
             do {
                 try await monitor.activate(decision.to)
                 switched = true
                 switchFailure = nil
                 autoSwapActivityIsFailure = false
+                activityLog.record("Auto swap succeeded.")
                 let relays = preferences.liveRelayEnabled && relayIsInstalled
                     ? relayController.queueHandoff(from: decision.from, to: decision.to) : 0
                 if relays > 0 {
@@ -285,6 +342,7 @@ final class AppModel {
                 }
             } catch {
                 let reason = Self.describeSwitchFailure(error)
+                activityLog.record("Auto swap failed: \(reason) [\(error)]")
                 autoSwapActivity = "Couldn't switch \(decision.provider.displayName): \(reason)"
                 autoSwapActivityIsFailure = true
                 switchFailure =
@@ -332,6 +390,8 @@ final class AppModel {
             let source = statuses.first {
                 $0.account.provider == status.account.provider && $0.isActive
             }?.account
+            activityLog.record(
+                "Use: \(status.account.provider.displayName) → \(status.account.label)")
             try await monitor.activate(status.account)
             let relays = preferences.liveRelayEnabled && relayIsInstalled
                 ? relayController.queueHandoff(from: source, to: status.account) : 0
@@ -347,12 +407,27 @@ final class AppModel {
             }
             await refresh()
         } catch {
+            activityLog.record("Use failed: \(error)")
             switchFailure =
                 "Couldn't switch to \(status.account.label): \(Self.describeSwitchFailure(error))"
         }
     }
 
     func dismissSwitchFailure() { switchFailure = nil }
+
+    func revealActivityLog() {
+        NSWorkspace.shared.activateFileViewerSelecting([activityLog.url])
+    }
+
+    private func describe(_ owner: LiveLoginOwner, in statuses: [AccountStatus]) -> String {
+        switch owner {
+        case .account(let id):
+            return statuses.first { $0.id == id }?.account.label ?? "a saved account"
+        case .someoneElse: return "an account that isn't saved in vibecom bar"
+        case .signedOut: return "signed out"
+        case .unknown: return "couldn't be read or identified"
+        }
+    }
 
     static func describeSwitchFailure(_ error: Error) -> String {
         switch error {

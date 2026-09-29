@@ -174,17 +174,22 @@ struct TokensCard: View {
 }
 
 /// Today's count to the last digit, climbing between readings like a ticker.
+///
+/// The climb only runs while the popover is on screen. Its hosting view stays
+/// alive while closed, and a running timeline there kept rendering at 12 fps,
+/// which is what macOS reported as significant energy use.
 private struct TickerNumber: View {
+    @Environment(\.popoverIsShown) private var isShown
     let ticker: TokenTicker
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 12)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 12, paused: !isShown)) { context in
             let value = ticker.value(at: context.date)
+            // No numeric content transition: it blurs every digit on every
+            // frame, and the climb already reads as motion.
             Text(UsageFormatter.fullTokens(value))
                 .font(.system(size: 21, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .contentTransition(.numericText(value: Double(value)))
-                .animation(.snappy(duration: 0.18), value: value)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
                 .accessibilityLabel("\(UsageFormatter.fullTokens(value)) tokens today")
@@ -194,6 +199,7 @@ private struct TickerNumber: View {
 
 private struct LiveBadge: View {
     @Environment(\.brand) private var brand
+    @Environment(\.popoverIsShown) private var isShown
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let rate: Int
     @State private var pulse = false
@@ -208,7 +214,8 @@ private struct LiveBadge: View {
                 .animation(
                     reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
                     value: pulse)
-                .onAppear { if !reduceMotion { pulse = true } }
+                .onAppear { pulse = isShown && !reduceMotion }
+                .onChange(of: isShown) { _, shown in pulse = shown && !reduceMotion }
             Text("\(UsageFormatter.tokens(rate))/min")
                 .font(.system(size: 10, weight: .medium))
                 .monospacedDigit()
@@ -216,4 +223,9 @@ private struct LiveBadge: View {
         }
         .help("Tokens per minute over the last five minutes")
     }
+}
+
+extension EnvironmentValues {
+    /// Whether the popover is on screen; continuous animations pause when not.
+    @Entry var popoverIsShown = true
 }

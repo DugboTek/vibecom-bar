@@ -45,6 +45,14 @@ and auto swap also posts a notification. The banner names the cause:
 Auto swap checks usage every minute once the active account passes 90%, and
 retries a failed switch every ten minutes while it stays at or above 99%.
 
+**Settings** shows, for Claude Code and Codex, why auto swap is or is not
+switching right now: for example "sola@example.com is at 75%; switches at 99%"
+or "no other account is ready". **Show activity log** opens
+`~/Library/Logs/VibecomBar/activity.log`, which records each account's usage at
+every refresh, which account each CLI is signed in to, and every switch
+attempted with its result. It never contains tokens; attach it to a bug report
+if auto swap misbehaves.
+
 ## Claude says "Not logged in"
 
 Run `claude auth login`, then use **Add the signed-in account** again. Avoid
