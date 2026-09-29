@@ -44,13 +44,76 @@ public enum AutoSwapPlanner {
         }
 
         let available = providerStatuses.filter { status in
-            !status.isActive && status.error == nil && status.snapshot != nil && !isNearLimit(status)
+            !status.isActive && isUsableDestination(status) && !isNearLimit(status)
         }
         guard let destination = available.min(by: { preferred($0, over: $1, now: now) }) else {
             return nil
         }
 
         return AutoSwapDecision(provider: provider, from: active.account, to: destination.account)
+    }
+
+    /// Why auto swap is or is not switching this provider right now, in words
+    /// the settings page and the activity log can show. Nil when the provider
+    /// has no saved accounts.
+    public static func explanation(
+        for provider: Provider, in statuses: [AccountStatus], now: Date = Date()
+    ) -> String? {
+        let providerStatuses = statuses.filter { $0.account.provider == provider }
+        guard !providerStatuses.isEmpty else { return nil }
+        let name = provider.displayName
+        guard let active = providerStatuses.first(where: \.isActive) else {
+            return "\(name): none of your saved accounts is the one signed in, so there is nothing to switch from."
+        }
+        guard isNearLimit(active) else {
+            let used = active.snapshot.map { snapshot in
+                UsageFormatter.percent(snapshot.windows.map(\.usedFraction).max() ?? 0)
+            }
+            if let used {
+                return "\(name): \(active.account.label) is at \(used); switches at 99%."
+            }
+            let reason = active.error?.message.lowercased() ?? "reading usage"
+            return "\(name): \(active.account.label) usage unknown (\(reason))."
+        }
+        if let decision = decision(for: provider, in: statuses, now: now) {
+            return "\(name): \(active.account.label) is spent; switching to \(decision.to.label)."
+        }
+        let others = providerStatuses.filter { !$0.isActive }.map { status -> String in
+            if status.snapshot == nil { return "\(status.account.label) — usage unknown" }
+            if !isUsableDestination(status), let error = status.error {
+                return "\(status.account.label) — \(error.message.lowercased())"
+            }
+            return "\(status.account.label) — also spent"
+        }
+        let detail = others.isEmpty ? "no other account is saved" : others.joined(separator: "; ")
+        return "\(name): \(active.account.label) is spent, but no other account is ready (\(detail))."
+    }
+
+    /// One account's state for the activity log.
+    public static func logLine(for status: AccountStatus) -> String {
+        var parts = ["\(status.account.provider.displayName) \(status.account.label)"]
+        if status.isActive { parts.append("ACTIVE") }
+        if let windows = status.snapshot?.windows, !windows.isEmpty {
+            parts.append(windows.map { "\($0.label) \(UsageFormatter.percent($0.usedFraction))" }
+                .joined(separator: ", "))
+        } else {
+            parts.append("no usage")
+        }
+        if let error = status.error { parts.append("error: \(error.message)") }
+        return parts.joined(separator: " | ")
+    }
+
+    /// A reading that could not be refreshed this time still counts: the
+    /// usage endpoint rate-limits, and treating a 429 as "not ready" left auto
+    /// swap with nowhere to go at the moment it was needed. Only a login that
+    /// needs signing in again rules an account out; the switch itself renews
+    /// and checks the login before using it.
+    static func isUsableDestination(_ status: AccountStatus) -> Bool {
+        guard status.snapshot != nil else { return false }
+        switch status.error {
+        case nil, .rateLimited, .unreachable, .awaitingCLIRenewal: return true
+        case .needsLogin, .cannotReadUsage: return false
+        }
     }
 
     static func isNearLimit(_ status: AccountStatus) -> Bool {

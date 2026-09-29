@@ -34,6 +34,25 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 - Usage is checked every minute while an active account is above 90%.
 - The active account no longer says "Sign in again" when only the CLI's own
   idle token has lapsed.
+- vibecom bar used most of a CPU core around the clock ("significant energy"
+  in macOS). The token ticker kept animating, with a blur on every digit,
+  while the popover was closed, and the token ledger re-read and re-summed a
+  week of transcripts every five seconds. The ticker now runs only while the
+  popover is open, transcripts are read every minute in the background, and
+  each update no longer copies every event.
+- Auto swap skipped switch targets whose last usage reading was rate limited
+  or unreachable, which is common when the usage endpoint is polled near a
+  limit. Only an account that needs signing in is skipped now; the switch
+  itself checks the login. Accounts not in use are read at most every 4.5
+  minutes, and App Nap no longer stretches the refresh timer while auto swap
+  is on.
+
+### Added
+
+- **Settings → Switch accounts at 99%** says why auto swap is or is not
+  switching each provider, and **Show activity log** opens
+  `~/Library/Logs/VibecomBar/activity.log`: what every refresh saw and every
+  switch it tried. It holds labels and percentages, never tokens.
 
 ## [1.0.0] - Unreleased
 

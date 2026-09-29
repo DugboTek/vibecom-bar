@@ -71,6 +71,13 @@ public actor AccountMonitor {
     private let now: @Sendable () -> Date
 
     private var lastGood: [UUID: UsageSnapshot] = [:]
+    /// When each account's usage was last read without error. Accounts not in
+    /// use are read at most this often, so the fast polling near a limit does
+    /// not trip the usage endpoint's rate limit for every saved account.
+    private var lastClean: [UUID: Date] = [:]
+    public static let inactiveRefreshInterval: TimeInterval = 270
+    /// Whose login each CLI held at the last refresh, for the activity log.
+    public private(set) var lastLiveOwners: [Provider: LiveLoginOwner] = [:]
     /// Who owns the last live Claude access token seen, so the profile lookup
     /// runs once per token rather than once per refresh.
     private var claudeProfileCache: (accessToken: String, identity: AccountIdentity)?
@@ -96,7 +103,9 @@ public actor AccountMonitor {
         // Which login each CLI holds is checked once per provider, not once per account.
         var active: [Provider: UUID] = [:]
         for provider in Set(accounts.map(\.provider)) {
-            switch await syncLiveLogin(for: provider) {
+            let owner = await syncLiveLogin(for: provider)
+            lastLiveOwners[provider] = owner
+            switch owner {
             case .account(let id):
                 active[provider] = id
             case .someoneElse, .signedOut:
@@ -119,6 +128,17 @@ public actor AccountMonitor {
     }
 
     private func refresh(_ account: StoredAccount, isActive: Bool) async -> AccountStatus {
+        if !isActive, let snapshot = lastGood[account.id], let clean = lastClean[account.id],
+            now().timeIntervalSince(clean) < Self.inactiveRefreshInterval
+        {
+            return AccountStatus(account: account, snapshot: snapshot, error: nil, isActive: false)
+        }
+        let status = await read(account, isActive: isActive)
+        if status.error == nil { lastClean[account.id] = now() } else { lastClean[account.id] = nil }
+        return status
+    }
+
+    private func read(_ account: StoredAccount, isActive: Bool) async -> AccountStatus {
         do {
             let secret = try await vault.secret(for: account.id)
             let usable = try await renewIfNeeded(

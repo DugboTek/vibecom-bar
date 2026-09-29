@@ -11,7 +11,7 @@ import VibecomBarCore
 /// `NSStatusItem` has no such lifecycle: if the item is hidden the app keeps
 /// running, and it can put the item back.
 @MainActor
-final class StatusItemController: NSObject, NSApplicationDelegate {
+final class StatusItemController: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let model = AppModel()
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
@@ -30,6 +30,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
 
         popover.behavior = .transient
         popover.animates = false
+        popover.delegate = self
         popover.contentViewController = NSHostingController(rootView: RootView(model: model))
 
         model.start()
@@ -57,6 +58,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
             attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
             ])
+    }
+
+    func popoverWillShow(_ notification: Notification) {
+        model.setPopoverShown(true)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        model.setPopoverShown(false)
     }
 
     @objc private func togglePopover() {

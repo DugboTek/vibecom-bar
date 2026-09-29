@@ -69,7 +69,21 @@ struct SettingsView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
+                    .padding(.top, 7)
+                    .padding(.bottom, model.autoSwapExplanations.isEmpty ? 7 : 3)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(model.autoSwapExplanations, id: \.self) { line in
+                            Text(line)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Button("Show activity log") { model.revealActivityLog() }
+                            .buttonStyle(.link)
+                    }
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 7)
                 }
             }
 
