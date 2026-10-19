@@ -12,6 +12,8 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Only one menu bar instance can run per user, even when launching app copies
+  from different folders or starting them simultaneously.
 - **Use** and auto swap failed for every Claude credential over 1 KB, which
   is any login with MCP servers signed in. The switch wrote through the
   `security` password prompt, which keeps only 128 bytes and stalls on longer

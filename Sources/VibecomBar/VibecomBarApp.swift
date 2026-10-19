@@ -2,6 +2,30 @@ import SwiftUI
 import VibecomBarCore
 
 @main
+enum VibecomBarMain {
+    @MainActor
+    static func main() {
+        // Rendering sample screenshots must remain possible while the bar runs.
+        if Snapshot.isRequested {
+            VibecomBarApp.main()
+            return
+        }
+
+        do {
+            let support = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("VibecomBar", isDirectory: true)
+            guard let lock = try SingleInstanceLock.acquire(
+                at: support.appendingPathComponent("instance.lock")) else { return }
+            // Acquire before SwiftUI creates the delegate and account model.
+            withExtendedLifetime(lock) { VibecomBarApp.main() }
+        } catch {
+            FileHandle.standardError.write(Data("Vibecom Bar could not lock its instance: \(error)\n".utf8))
+            exit(EXIT_FAILURE)
+        }
+    }
+}
+
 struct VibecomBarApp: App {
     @NSApplicationDelegateAdaptor(StatusItemController.self) private var controller
 
