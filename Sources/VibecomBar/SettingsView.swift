@@ -110,6 +110,20 @@ struct SettingsView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
 
+                if !model.claudeTokenOverrideSources.isEmpty {
+                    Divider().padding(.leading, 12)
+                    Label {
+                        Text("CLAUDE_CODE_OAUTH_TOKEN is set in \(model.claudeTokenOverrideSources.joined(separator: " and ")). Claude sessions started with it stay on that token's account and ignore every switch. Remove it, then start new sessions.")
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                }
+
                 if let message = model.relayStatusMessage {
                     Divider().padding(.leading, 12)
                     Text(message)

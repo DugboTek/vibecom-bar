@@ -53,6 +53,22 @@ every refresh, which account each CLI is signed in to, and every switch
 attempted with its result. It never contains tokens; attach it to a bug report
 if auto swap misbehaves.
 
+## A running session stayed on the old account
+
+The activity log records, after each switch, how many running sessions were
+asked to move (`Live Handoff: asked N running … sessions to move`). If a
+session did not move:
+
+- **Live Handoff is off** — turn it on in Settings. Only sessions started after
+  it is on go through the relay; resume older ones with **Adopt an existing
+  session**.
+- **`CLAUDE_CODE_OAUTH_TOKEN` is set** — Claude Code then uses that token and
+  ignores the Keychain, so no switch can move the session. Settings shows where
+  it is set. Remove the `export` line from your shell profile, run
+  `launchctl unsetenv CLAUDE_CODE_OAUTH_TOKEN`, then reopen your terminal app
+  (Xirp, Terminal) and start new sessions.
+- A session moves only between turns, after it next goes idle.
+
 ## Claude says "Not logged in"
 
 Run `claude auth login`, then use **Add the signed-in account** again. Avoid
