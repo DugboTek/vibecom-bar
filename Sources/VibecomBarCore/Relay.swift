@@ -90,6 +90,63 @@ public enum RelayPaths {
     public static func originalExecutable(for provider: Provider) -> URL {
         executable(for: provider).appendingPathExtension("vibecom-original")
     }
+
+    /// The CLI a relay should start. Claude Code's installer keeps each
+    /// version in `~/.local/share/claude/versions/<semver>` and normally
+    /// repoints `~/.local/bin/claude` at the newest one. With the relay in that
+    /// spot, the saved original link stayed on the version current at install
+    /// time, so every relay session ran a month-old Claude Code. When the
+    /// original points into such a versions folder, the newest version wins.
+    public static func launchTarget(for original: URL) -> URL {
+        let manager = FileManager.default
+        let resolved = original.resolvingSymlinksInPath()
+        let folder = resolved.deletingLastPathComponent()
+        guard folder.lastPathComponent == "versions",
+            let current = Version(resolved.lastPathComponent),
+            let names = try? manager.contentsOfDirectory(atPath: folder.path)
+        else { return original }
+        let newest = names
+            .compactMap { name in Version(name).map { (name, $0) } }
+            .filter { manager.isExecutableFile(atPath: folder.appendingPathComponent($0.0).path) }
+            .max { $0.1 < $1.1 }
+        guard let newest, current < newest.1 else { return original }
+        return folder.appendingPathComponent(newest.0)
+    }
+
+    struct Version: Comparable {
+        let parts: [Int]
+        init?(_ text: String) {
+            let pieces = text.split(separator: ".")
+            guard pieces.count >= 2 else { return nil }
+            var parts: [Int] = []
+            for piece in pieces {
+                guard let number = Int(piece) else { return nil }
+                parts.append(number)
+            }
+            self.parts = parts
+        }
+        static func < (lhs: Version, rhs: Version) -> Bool { lhs.parts.lexicographicallyPrecedes(rhs.parts) }
+    }
+
+    /// This process's own executable, symlinks resolved. `argv[0]` is only
+    /// `claude` when the command is found on PATH, which made the relay look
+    /// for its Claude plugin relative to the working directory and silently
+    /// start sessions without the hooks that report idle turns.
+    public static var currentExecutable: URL {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let length = proc_pidpath(getpid(), &buffer, UInt32(buffer.count))
+        if length > 0 {
+            let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+            return URL(fileURLWithPath: String(decoding: bytes, as: UTF8.self)).resolvingSymlinksInPath()
+        }
+        return (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]))
+            .resolvingSymlinksInPath()
+    }
+
+    public static func claudePlugin(besides helper: URL) -> URL {
+        helper.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/VibecomRelayClaudePlugin", isDirectory: true)
+    }
 }
 
 public enum RelayFiles {
@@ -118,6 +175,24 @@ public enum RelayFiles {
 }
 
 public enum RelayArguments {
+    /// The conversation a launch names up front. Xirp starts every Claude
+    /// session with `--session-id`, so the relay knows what to resume before
+    /// any hook has reported in.
+    public static func sessionID(provider: Provider, arguments: [String]) -> String? {
+        let flags: Set<String> = provider == .claude ? ["--session-id", "--resume", "-r"] : ["resume"]
+        for (index, argument) in arguments.enumerated() where flags.contains(argument) {
+            let next = index + 1 < arguments.count ? arguments[index + 1] : nil
+            if let next, !next.hasPrefix("-"), !next.isEmpty { return next }
+        }
+        if provider == .claude,
+            let inline = arguments.first(where: { $0.hasPrefix("--session-id=") || $0.hasPrefix("--resume=") })
+        {
+            let value = String(inline.split(separator: "=", maxSplits: 1).last ?? "")
+            return value.isEmpty ? nil : value
+        }
+        return nil
+    }
+
     public static func resume(
         provider: Provider, sessionID: String, original: [String]
     ) -> [String] {
@@ -206,8 +281,17 @@ public struct RelayController: @unchecked Sendable {
         let targetKey = Self.accountKey(for: to)
         var count = 0
         for url in entries where Self.sessionPID(from: url) != nil {
-            guard var session = try? RelayFiles.read(RelaySession.self, from: url),
-                session.provider == to.provider,
+            guard var session = try? RelayFiles.read(RelaySession.self, from: url) else { continue }
+            // A relay that is gone, or whose PID now belongs to something
+            // else, leaves its files behind; clearing them keeps this scan small.
+            guard signal(session.relayPID, 0) == 0, isRelayProcess(session.relayPID) else {
+                for stale in [url, RelayPaths.command(session.relayPID, in: runtimeDirectory),
+                              RelayPaths.event(session.relayPID, in: runtimeDirectory)] {
+                    try? FileManager.default.removeItem(at: stale)
+                }
+                continue
+            }
+            guard session.provider == to.provider,
                 sourceKey == nil || session.accountKey == sourceKey,
                 signal(session.relayPID, 0) == 0,
                 isRelayProcess(session.relayPID)
@@ -294,12 +378,23 @@ public struct RelayInstaller: Sendable {
         self.codexHooksURL = codexHooksURL
     }
 
-    public var isInstalled: Bool {
-        Provider.allCases.allSatisfy { provider in
-            let path = executable(for: provider)
-            guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: path.path)
-            else { return false }
-            return resolvedLink(destination, relativeTo: path) == relayExecutable.standardizedFileURL
+    public var isInstalled: Bool { Provider.allCases.allSatisfy(isInstalled) }
+
+    public func isInstalled(_ provider: Provider) -> Bool {
+        let path = executable(for: provider)
+        guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: path.path)
+        else { return false }
+        return resolvedLink(destination, relativeTo: path) == relayExecutable.standardizedFileURL
+    }
+
+    /// Providers whose command no longer goes through the relay although a
+    /// relay install left its backup behind: the CLI's own updater rewrote the
+    /// link. Codex did this on Oct 19, which used to switch the relay off for
+    /// Claude too.
+    public var providersNeedingRepair: [Provider] {
+        Provider.allCases.filter { provider in
+            !isInstalled(provider)
+                && FileManager.default.fileExists(atPath: originalExecutable(for: provider).path)
         }
     }
 
@@ -365,8 +460,15 @@ public struct RelayInstaller: Sendable {
         guard manager.fileExists(atPath: live.path) else {
             throw RelayInstallError.cliMissing(provider == .codex ? "Codex" : "Claude")
         }
-        guard !manager.fileExists(atPath: backup.path) else {
-            throw RelayInstallError.unexpectedExistingBackup(provider == .codex ? "codex" : "claude")
+        if (try? manager.destinationOfSymbolicLink(atPath: backup.path)) != nil
+            || manager.fileExists(atPath: backup.path)
+        {
+            // The CLI's updater replaced the relay link with its own, newer
+            // command. That command becomes the original; the old backup is
+            // kept beside it rather than deleted.
+            let previous = backup.appendingPathExtension("previous")
+            try? manager.removeItem(at: previous)
+            try manager.moveItem(at: backup, to: previous)
         }
         try manager.moveItem(at: live, to: backup)
         do {
@@ -487,5 +589,35 @@ public struct RelayInstaller: Sendable {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
+/// Where `CLAUDE_CODE_OAUTH_TOKEN` is being set. Claude Code prefers that
+/// variable over its Keychain login, so every session started with it stays on
+/// the token's account no matter what vibecom bar switches to.
+public enum ClaudeTokenOverride {
+    public static let variable = "CLAUDE_CODE_OAUTH_TOKEN"
+    static let profiles = [".zshenv", ".zprofile", ".zshrc", ".zlogin", ".bash_profile", ".bashrc", ".profile"]
+
+    public static func sources(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [String] {
+        var found: [String] = []
+        if environment[variable]?.isEmpty == false {
+            found.append("the login session (launchctl), so apps opened from the Dock inherit it")
+        }
+        for name in profiles {
+            guard let text = try? String(contentsOf: home.appendingPathComponent(name), encoding: .utf8)
+            else { continue }
+            let setsIt = text.split(separator: "\n").contains { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.hasPrefix("#") && trimmed.contains("\(variable)=")
+                    && (trimmed.hasPrefix("export") || trimmed.hasPrefix(variable)
+                        || trimmed.hasPrefix("launchctl"))
+            }
+            if setsIt { found.append("~/\(name)") }
+        }
+        return found
     }
 }

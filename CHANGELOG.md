@@ -49,6 +49,23 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
   minutes, and App Nap no longer stretches the refresh timer while auto swap
   is on.
 
+- Running Claude sessions did not move after auto swap switched accounts:
+  - A Codex update rewrote `~/.local/bin/codex`, and the app treated the relay
+    as uninstalled and turned Live Handoff off for Claude too. Each provider is
+    now checked on its own, and while Live Handoff is on, a link a CLI updater
+    replaced is put back, with the updater's newer command kept as the original.
+  - Started as `claude` from PATH (how Xirp and terminals start it), the relay
+    looked for its lifecycle plugin relative to the working directory, so
+    sessions ran without the hooks that report idle turns and could never be
+    handed off. It now finds the plugin from its own executable path, and takes
+    the conversation ID from `--session-id`/`--resume` up front.
+  - The relay kept starting the Claude Code version current when it was
+    installed (2.1.280 while 2.1.311 was installed); it now starts the newest.
+  - Files left by exited relays are cleared during handoff.
+- Sessions started with `CLAUDE_CODE_OAUTH_TOKEN` ignore the Keychain, so no
+  switch can move them. The relay prints a warning at launch, Settings names
+  where the variable is set, and the activity log records it on every handoff.
+
 ### Added
 
 - **Settings → Switch accounts at 99%** says why auto swap is or is not

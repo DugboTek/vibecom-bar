@@ -47,6 +47,9 @@ final class AppModel {
     private(set) var isPopoverShown = false
     private(set) var relayIsInstalled = false
     private(set) var relayStatusMessage: String?
+    /// Where CLAUDE_CODE_OAUTH_TOKEN is set; Claude sessions started with it
+    /// ignore every switch.
+    private(set) var claudeTokenOverrideSources: [String] = ClaudeTokenOverride.sources()
     var page: Page = .accounts
 
     var preferences: Preferences {
@@ -124,12 +127,52 @@ final class AppModel {
             relayExecutable: executableDirectory.appendingPathComponent("VibecomRelay"),
             claudePlugin: resources.appendingPathComponent(
                 "VibecomRelayClaudePlugin", isDirectory: true))
-        relayIsInstalled = relayInstaller.isInstalled
-        if preferences.liveRelayEnabled && !relayIsInstalled {
-            // Never mutate command resolution merely because the app launched.
-            // A missing relay stays visibly off until the user enables it again.
+        relayIsInstalled = Provider.allCases.contains(where: relayInstaller.isInstalled)
+        if preferences.liveRelayEnabled {
+            repairRelayIfNeeded()
+        }
+        if preferences.liveRelayEnabled && !relayIsInstalled
+            && relayInstaller.providersNeedingRepair.isEmpty
+        {
+            // Never install the relay merely because the app launched. A relay
+            // that was removed stays visibly off until the user enables it.
             preferences.liveRelayEnabled = false
         }
+    }
+
+    /// CLI updaters replace their own `~/.local/bin` link. While the user has
+    /// Live Handoff on, put the relay back in front of that command; the
+    /// updater's newer command becomes the relay's original. A Codex update
+    /// doing this used to switch handoff off for Claude sessions too.
+    private func repairRelayIfNeeded() {
+        let broken = relayInstaller.providersNeedingRepair
+        guard preferences.liveRelayEnabled, !broken.isEmpty else { return }
+        let names = broken.map(\.displayName).joined(separator: " and ")
+        do {
+            try relayInstaller.install()
+            relayStatusMessage = "Reconnected \(names) to Live Handoff after a CLI update replaced its command."
+            activityLog.record("Relay repaired for \(names).")
+        } catch {
+            relayStatusMessage = "\(names) left Live Handoff after a CLI update: \(error.localizedDescription)"
+            activityLog.record("Relay repair failed for \(names): \(error)")
+        }
+        relayIsInstalled = Provider.allCases.contains(where: relayInstaller.isInstalled)
+    }
+
+    private func queueRelayHandoff(from source: StoredAccount?, to target: StoredAccount) -> Int {
+        guard preferences.liveRelayEnabled, relayInstaller.isInstalled(target.provider) else {
+            activityLog.record(
+                "Live Handoff is off for \(target.provider.displayName); running sessions keep their account.")
+            return 0
+        }
+        let count = relayController.queueHandoff(from: source, to: target)
+        activityLog.record(
+            "Live Handoff: asked \(count) running \(target.provider.displayName) session\(count == 1 ? "" : "s") to move.")
+        if target.provider == .claude, !claudeTokenOverrideSources.isEmpty {
+            activityLog.record(
+                "CLAUDE_CODE_OAUTH_TOKEN is set (\(claudeTokenOverrideSources.joined(separator: ", "))); sessions started with it ignore switches.")
+        }
+        return count
     }
 
     // MARK: - Lifecycle
@@ -279,6 +322,8 @@ final class AppModel {
         isRefreshing = true
         defer { isRefreshing = false }
 
+        repairRelayIfNeeded()
+        claudeTokenOverrideSources = ClaudeTokenOverride.sources()
         async let refreshedStanding = fetchVibecomStanding()
         let previous = statuses
         let current = await monitor.refreshAll()
@@ -327,8 +372,7 @@ final class AppModel {
                 switchFailure = nil
                 autoSwapActivityIsFailure = false
                 activityLog.record("Auto swap succeeded.")
-                let relays = preferences.liveRelayEnabled && relayIsInstalled
-                    ? relayController.queueHandoff(from: decision.from, to: decision.to) : 0
+                let relays = queueRelayHandoff(from: decision.from, to: decision.to)
                 if relays > 0 {
                     autoSwapActivity = "Moving \(relays) live \(decision.provider.displayName) session\(relays == 1 ? "" : "s") after the current turn."
                 } else {
@@ -393,8 +437,7 @@ final class AppModel {
             activityLog.record(
                 "Use: \(status.account.provider.displayName) → \(status.account.label)")
             try await monitor.activate(status.account)
-            let relays = preferences.liveRelayEnabled && relayIsInstalled
-                ? relayController.queueHandoff(from: source, to: status.account) : 0
+            let relays = queueRelayHandoff(from: source, to: status.account)
             if relays > 0 {
                 autoSwapActivity = "Moving \(relays) live \(status.account.provider.displayName) session\(relays == 1 ? "" : "s") after the current turn."
             } else if status.account.provider == .codex {
@@ -454,7 +497,7 @@ final class AppModel {
         do {
             if enabled {
                 try relayInstaller.install()
-                relayIsInstalled = true
+                relayIsInstalled = Provider.allCases.contains(where: relayInstaller.isInstalled)
                 preferences.liveRelayEnabled = true
                 relayStatusMessage = "Ready. New Claude and Codex sessions can move accounts between turns."
             } else {
@@ -464,7 +507,7 @@ final class AppModel {
                 relayStatusMessage = "Off. Your original Claude and Codex commands were restored."
             }
         } catch {
-            relayIsInstalled = relayInstaller.isInstalled
+            relayIsInstalled = Provider.allCases.contains(where: relayInstaller.isInstalled)
             preferences.liveRelayEnabled = relayIsInstalled
             relayStatusMessage = error.localizedDescription
         }

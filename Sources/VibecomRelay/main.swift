@@ -20,7 +20,8 @@ private final class RelayRuntime: @unchecked Sendable {
         self.claudePlugin = claudePlugin
         self.session = RelaySession(
             relayPID: relayPID, provider: provider,
-            accountKey: Self.currentAccountKey(provider: provider))
+            accountKey: Self.currentAccountKey(provider: provider),
+            sessionID: RelayArguments.sessionID(provider: provider, arguments: arguments))
     }
 
     func start() throws {
@@ -174,12 +175,21 @@ private enum RelayMain {
             exit(127)
         }
 
-        let resolvedHelper = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-        let bundledPlugin = resolvedHelper.deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Resources/VibecomRelayClaudePlugin", isDirectory: true)
+        let bundledPlugin = RelayPaths.claudePlugin(besides: RelayPaths.currentExecutable)
         let plugin = FileManager.default.fileExists(atPath: bundledPlugin.path) ? bundledPlugin : nil
+        if provider == .claude, plugin == nil {
+            fputs("Vibecom Relay: lifecycle plugin missing; this session can't move accounts.\n", stderr)
+        }
+        if provider == .claude,
+            ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"]?.isEmpty == false
+        {
+            fputs(
+                "Vibecom Relay: CLAUDE_CODE_OAUTH_TOKEN is set, so this session ignores account "
+                    + "switching. Remove it from your shell profile and launchctl.\n", stderr)
+        }
         let runtime = RelayRuntime(
-            provider: provider, arguments: arguments, executable: original, claudePlugin: plugin)
+            provider: provider, arguments: arguments,
+            executable: RelayPaths.launchTarget(for: original), claudePlugin: plugin)
         signal(SIGUSR1, SIG_IGN)
         signal(SIGUSR2, SIG_IGN)
         let swap = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
@@ -198,13 +208,9 @@ private enum RelayMain {
     }
 
     private static func installerCommand(uninstall: Bool) -> Never {
-        let helper = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-        let resources = helper.deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Resources", isDirectory: true)
+        let helper = RelayPaths.currentExecutable
         let installer = RelayInstaller(
-            relayExecutable: helper,
-            claudePlugin: resources.appendingPathComponent(
-                "VibecomRelayClaudePlugin", isDirectory: true))
+            relayExecutable: helper, claudePlugin: RelayPaths.claudePlugin(besides: helper))
         do {
             if uninstall {
                 try installer.uninstall()
