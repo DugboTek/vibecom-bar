@@ -6,11 +6,23 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- One-line install that needs no Xcode:
+  `curl -fsSL https://vibecom.build/bar/install.sh | bash`. It verifies the
+  release checksum and the Developer ID team, quits a running copy, swaps the
+  app in place, and opens it. Running it again updates.
+- Releases are universal binaries for Apple silicon and Intel Macs, and
+  `scripts/release.sh --publish` cuts one locally.
+
 - Public documentation, sample-data screenshots, and security policy.
 - CI and notarized-release scaffolding.
 - Versioned build metadata and a repository-owned app icon.
 
 ### Fixed
+
+- Source builds on a Mac with only the Command Line Tools failed with
+  "plugin for module 'SwiftUIMacros' not found". `build-app.sh` now uses an
+  installed Xcode automatically, or explains what is missing and points to
+  the installer.
 
 - Only one menu bar instance can run per user, even when launching app copies
   from different folders or starting them simultaneously.

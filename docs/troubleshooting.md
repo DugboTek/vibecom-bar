@@ -104,6 +104,29 @@ Token totals come from local CLI transcripts. Use Claude Code or Codex once on
 this Mac, then wait a few seconds. The app ignores transcripts older than its
 seven-day lookback and incomplete lines that a CLI is still writing.
 
+## A source build fails with "plugin for module 'SwiftUIMacros' not found"
+
+The Mac has the Command Line Tools but not Xcode. The Command Line Tools
+include the Swift compiler but not SwiftUI's macro plugins, so `@State` and
+`@Entry` cannot expand. The errors that follow (`cannot assign to property:
+'self' is immutable`, `extensions must not contain stored properties`) are
+side effects of the same thing.
+
+Either install the signed release, which needs no developer tools:
+
+```bash
+curl -fsSL https://vibecom.build/bar/install.sh | bash
+```
+
+or install Xcode 16 or newer from the App Store, open it once, and run
+`./scripts/build-app.sh` again. The script uses an installed Xcode even when
+`xcode-select` still points at the Command Line Tools.
+
+## The installer says the signature or checksum does not match
+
+Nothing was installed. The download was incomplete or was not the official
+build. Run the command again; if it repeats, open an issue with the output.
+
 ## A source build prompts after every rebuild
 
 Ad-hoc code signatures change when the binary changes. Build with a stable
@@ -114,4 +137,4 @@ VIBECOM_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
   ./scripts/build-app.sh
 ```
 
-Official releases use a stable Developer ID signature and Apple notarization.
+Official releases use a stable Developer ID signature.

@@ -2,7 +2,8 @@
 
 ## Set up
 
-You need macOS 14 or newer and the Swift toolchain included with current Xcode.
+You need macOS 14 or newer and Xcode 16 or newer. The Command Line Tools
+alone cannot build the app because SwiftUI's macros ship only with Xcode.
 
 ```bash
 git clone https://github.com/DugboTek/vibecom-bar.git
@@ -62,11 +63,18 @@ provider responses containing personal data, or local diagnostic traces.
 
 1. Update `VERSION` and `CHANGELOG.md`.
 2. Run `swift test` and `./scripts/build-app.sh` locally.
-3. Merge to `main` and create a matching tag such as `v1.0.0`.
-4. The release workflow imports the Developer ID certificate, builds with the
-   hardened runtime, submits the ZIP to Apple's notary service, staples the
-   ticket, verifies Gatekeeper acceptance, and publishes the ZIP plus checksum.
-5. Update the Homebrew tap with the released version and SHA-256 checksum.
+3. Merge to `main`.
+4. On a Mac with the Developer ID Application certificate, run
+   `./scripts/release.sh --publish`. It builds a universal (Apple silicon and
+   Intel) app with the hardened runtime, notarizes and staples it when
+   notarization credentials are set (see the script header), zips it, writes
+   the SHA-256, and creates the `v$VERSION` GitHub release.
+   `VIBECOM_ALLOW_UNNOTARIZED=1` ships a signed-only build; `install.sh`
+   installs it without Gatekeeper prompts because curl downloads are not
+   quarantined.
+5. Check that `curl -fsSL https://vibecom.build/bar/install.sh | bash`
+   installs the new version.
 
-The GitHub repository needs the secrets documented in
-`.github/workflows/release.yml`. Fork pull requests never receive them.
+Pushing a `v*` tag also runs `.github/workflows/release.yml`, which signs,
+notarizes, and publishes from CI once the secrets it lists are set; without
+them it only runs the tests. Fork pull requests never receive the secrets.

@@ -16,7 +16,20 @@ jobs:
       - name: Run offline test suite
         run: swift test
 
+      # Releases can also be cut locally with ./scripts/release.sh --publish.
+      # Without the signing secrets this workflow only runs the tests.
+      - name: Check for signing secrets
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+        run: |
+          if [ -n "$BUILD_CERTIFICATE_BASE64" ]; then
+            echo "HAVE_SIGNING=true" >> "$GITHUB_ENV"
+          else
+            echo "::notice::No signing secrets; skipping the signed build."
+          fi
+
       - name: Import Developer ID certificate
+        if: env.HAVE_SIGNING == 'true'
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
@@ -33,6 +46,7 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH"
 
       - name: Build, notarize, and package
+        if: env.HAVE_SIGNING == 'true'
         env:
           VIBECOM_SIGN_IDENTITY: ${{ secrets.VIBECOM_SIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -42,9 +56,14 @@ jobs:
         run: ./scripts/release.sh
 
       - name: Publish GitHub release
+        if: env.HAVE_SIGNING == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/Vibecom-Bar.zip dist/Vibecom-Bar.zip.sha256 --clobber
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" \
             dist/Vibecom-Bar.zip \
             dist/Vibecom-Bar.zip.sha256 \

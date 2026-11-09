@@ -15,15 +15,61 @@ VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 BUILD_NUMBER="${VIBECOM_BUILD_NUMBER:-1}"
 BUNDLE_ID="build.vibecom.menubar"
 
+# SwiftUI's macros (@State, @Entry, ...) ship only inside Xcode. Command Line
+# Tools alone has the Swift compiler but not those plugins, so a build there
+# fails with "plugin for module 'SwiftUIMacros' not found". Use an installed
+# Xcode even when xcode-select points at Command Line Tools.
+has_swiftui_macros() {
+  local dev="$1"
+  [[ -e "$dev/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib" ||
+     -e "$dev/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib" ]]
+}
+ACTIVE_DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p 2>/dev/null || true)}"
+if [[ -z "$ACTIVE_DEVELOPER_DIR" ]] || ! has_swiftui_macros "$ACTIVE_DEVELOPER_DIR"; then
+  FOUND_XCODE=""
+  for candidate in /Applications/Xcode*.app/Contents/Developer(N) "$HOME"/Applications/Xcode*.app/Contents/Developer(N); do
+    if has_swiftui_macros "$candidate"; then
+      FOUND_XCODE="$candidate"
+      break
+    fi
+  done
+  if [[ -n "$FOUND_XCODE" ]]; then
+    export DEVELOPER_DIR="$FOUND_XCODE"
+    echo "› Using $FOUND_XCODE (the active developer tools cannot build SwiftUI apps)"
+  else
+    cat >&2 <<'MESSAGE'
+✗ Building Vibecom Bar needs Xcode, not only the Command Line Tools.
+
+  SwiftUI's macros ship inside Xcode, so Command Line Tools alone fails with
+  "plugin for module 'SwiftUIMacros' not found".
+
+  You do not need to build it yourself. Install the signed release instead:
+
+    curl -fsSL https://vibecom.build/bar/install.sh | bash
+
+  To build from source, install Xcode from the App Store, open it once, then
+  run ./scripts/build-app.sh again.
+MESSAGE
+    exit 1
+  fi
+fi
+
+# VIBECOM_UNIVERSAL=1 builds one binary for Apple silicon and Intel Macs.
+ARCH_FLAGS=()
+if [[ "${VIBECOM_UNIVERSAL:-0}" == "1" ]]; then
+  ARCH_FLAGS=(--arch arm64 --arch x86_64)
+fi
+
 echo "› Building release binary"
-swift build -c release --product VibecomBar
-swift build -c release --product VibecomRelay
+swift build -c release "${ARCH_FLAGS[@]}" --product VibecomBar
+swift build -c release "${ARCH_FLAGS[@]}" --product VibecomRelay
+BIN_DIR="$(swift build -c release "${ARCH_FLAGS[@]}" --show-bin-path)"
 
 echo "› Assembling bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$ROOT/.build/release/VibecomBar" "$APP/Contents/MacOS/VibecomBar"
-cp "$ROOT/.build/release/VibecomRelay" "$APP/Contents/MacOS/VibecomRelay"
+cp "$BIN_DIR/VibecomBar" "$APP/Contents/MacOS/VibecomBar"
+cp "$BIN_DIR/VibecomRelay" "$APP/Contents/MacOS/VibecomRelay"
 cp -R "$ROOT/Resources/VibecomRelayClaudePlugin" "$APP/Contents/Resources/VibecomRelayClaudePlugin"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
