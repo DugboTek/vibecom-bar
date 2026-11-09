@@ -57,9 +57,25 @@ standing, streak, and progress to the next rank appear alongside them.
 ## Install
 
 Vibecom Bar requires macOS 14 or newer and Claude Code, Codex, or both.
+Paste this into Terminal:
 
-The signed download is coming with the first release. For now, build it from
-source:
+```bash
+curl -fsSL https://vibecom.build/bar/install.sh | bash
+```
+
+It downloads the latest [release](https://github.com/DugboTek/vibecom-bar/releases/latest),
+checks its SHA-256 and its Developer ID signature (team `N9S23BFMU4`),
+installs it in `/Applications`, and opens it. You do not need Xcode. Run the
+same command again to update. The script is
+[`scripts/install.sh`](scripts/install.sh) if you want to read it first.
+
+Then open the cloud in your menu bar and choose **Add account**.
+
+### Build from source
+
+Building needs **Xcode 16 or newer**, not just the Command Line Tools: SwiftUI's
+macros ship only inside Xcode. The build script finds an installed Xcode even
+when `xcode-select` points at the Command Line Tools.
 
 ```bash
 git clone https://github.com/DugboTek/vibecom-bar.git
@@ -67,8 +83,6 @@ cd vibecom-bar
 ./scripts/build-app.sh
 open "Vibecom Bar.app"
 ```
-
-Then open the cloud in your menu bar and choose **Add account**.
 
 [Read the getting-started guide →](docs/getting-started.md)
 

@@ -11,7 +11,18 @@ Claude Code or Codex account.
 
 ## Step 1: Install and open the app
 
-For a source build:
+Paste this into Terminal:
+
+```bash
+curl -fsSL https://vibecom.build/bar/install.sh | bash
+```
+
+The script verifies the download's checksum and Developer ID signature,
+installs the app in `/Applications`, and opens it. It needs no developer
+tools. Run it again later to update.
+
+To build from source instead, you need Xcode 16 or newer (the Command Line
+Tools alone cannot build SwiftUI apps):
 
 ```bash
 git clone https://github.com/DugboTek/vibecom-bar.git

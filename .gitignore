@@ -2,3 +2,7 @@
 *.xcuserdatad
 Vibecom Bar.app/
 .DS_Store
+
+# vibecom: contains an ingest token, do not commit
+.claude/settings.local.json
+dist/

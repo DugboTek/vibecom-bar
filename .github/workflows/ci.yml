@@ -15,5 +15,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Run offline test suite
         run: swift test
-      - name: Build release binary
-        run: swift build -c release --product VibecomBar
+      - name: Build the app bundle
+        run: VIBECOM_SIGN_IDENTITY="-" ./scripts/build-app.sh
+      - name: Check installer syntax under macOS bash 3.2
+        run: /bin/bash -n scripts/install.sh
