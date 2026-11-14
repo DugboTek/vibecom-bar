@@ -6,6 +6,16 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Serve Another User** (off by default) supplies the Claude login for a
+  second macOS user on the same Mac, such as a `compass` account that never
+  signs in to the desktop, from the same account pool and following every
+  manual or automatic switch. Each Claude account can hold an optional
+  Compass token (pasted from `claude setup-token`, stored in the Keychain);
+  the active account's token is written atomically, mode 640, to
+  `/Users/Shared/compass-auth/claude.token`, and the file is removed when the
+  active account has none. Refresh tokens are never shared, and the token
+  never appears in logs. See the README for the one-time `sudo` setup.
+
 - One-line install that needs no Xcode:
   `curl -fsSL https://vibecom.build/bar/install.sh | bash`. It verifies the
   release checksum and the Developer ID team, quits a running copy, swaps the

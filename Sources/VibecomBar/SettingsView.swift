@@ -7,6 +7,8 @@ struct SettingsView: View {
     @State private var adoptionProvider: Provider = .codex
     @State private var adoptionSessionID = ""
     @State private var showingAdoptionConfirmation = false
+    @State private var draftServePath: String?
+    @State private var showingServeSetup = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -177,6 +179,10 @@ struct SettingsView: View {
                 }
             }
 
+            group("Serve Another User") {
+                serveAnotherUser
+            }
+
             group("Privacy") {
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -215,6 +221,127 @@ struct SettingsView: View {
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, 4)
         }
+    }
+
+    @ViewBuilder
+    private var serveAnotherUser: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Serve another local user")
+                    .font(.system(size: 12))
+                Text("Gives another macOS user on this Mac the active Claude account's Compass token, and follows every switch.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Toggle("Serve another local user", isOn: $model.preferences.serveLocalUserEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+
+        if model.preferences.serveLocalUserEnabled {
+            Divider().padding(.leading, 12)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Token file")
+                    .font(.system(size: 11, weight: .medium))
+                HStack(spacing: 6) {
+                    TextField(ServeSettings.defaultPath, text: servePathBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 10, design: .monospaced))
+                        .onSubmit(applyServePath)
+                    Button("Apply", action: applyServePath)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(draftServePath == nil || draftServePath == model.preferences.serveLocalUserPath)
+                }
+                if let draft = draftServePath, let problem = ServeSettings.problem(with: draft) {
+                    Text(problem)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                }
+
+                Label {
+                    Text(model.serveStatus.message(showingAccount: !model.preferences.blurAccountNames))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                } icon: {
+                    Image(systemName: serveStatusIcon)
+                        .foregroundStyle(serveStatusTint)
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .accessibilityElement(children: .combine)
+
+                HStack(spacing: 10) {
+                    Button(showingServeSetup ? "Hide setup" : "Setup…") { showingServeSetup.toggle() }
+                        .buttonStyle(.link)
+                    Button("Show folder") { model.revealServeFolder() }
+                        .buttonStyle(.link)
+                    Button("Show activity log") { model.revealActivityLog() }
+                        .buttonStyle(.link)
+                }
+                .font(.system(size: 10))
+
+                if showingServeSetup {
+                    serveSetupNotes
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var serveStatusIcon: String {
+        switch model.serveStatus {
+        case .serving: "checkmark.circle.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        case .pausedNoToken, .pausedNoActiveAccount: "pause.circle"
+        case .off: "circle"
+        }
+    }
+
+    private var serveStatusTint: AnyShapeStyle {
+        switch model.serveStatus {
+        case .serving: AnyShapeStyle(.green)
+        case .failed: AnyShapeStyle(.orange)
+        default: AnyShapeStyle(.secondary)
+        }
+    }
+
+    private var servePathBinding: Binding<String> {
+        Binding(
+            get: { draftServePath ?? model.preferences.serveLocalUserPath },
+            set: { draftServePath = $0 })
+    }
+
+    private func applyServePath() {
+        guard let draft = draftServePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+            ServeSettings.problem(with: draft) == nil
+        else { return }
+        model.preferences.serveLocalUserPath = draft
+        draftServePath = nil
+    }
+
+    private var serveSetupNotes: some View {
+        let folder = (model.preferences.serveLocalUserPath as NSString).deletingLastPathComponent
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("1. Once, as an admin, create the folder and a group both users share:")
+            Text(
+                "sudo dseditgroup -o create compassauth\nsudo dseditgroup -o edit -a \(NSUserName()) -t user compassauth\nsudo dseditgroup -o edit -a compass -t user compassauth\nsudo mkdir -p \(folder)\nsudo chown \(NSUserName()):compassauth \(folder)\nsudo chmod 750 \(folder)"
+            )
+            .font(.system(size: 9, design: .monospaced))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            Text("2. For each Claude account, run `claude setup-token` signed in as it, then choose Set Compass Token… from the account's menu and paste the token.")
+            Text("3. The other user reads the file into CLAUDE_CODE_OAUTH_TOKEN. The file is removed when the active account has no token, so that user pauses instead of using the wrong account.")
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

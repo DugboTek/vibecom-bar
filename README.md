@@ -48,6 +48,46 @@ the selected account between turns and continue the same conversation. It works
 in Terminal, tmux, and Xirp when they launch through the installed Vibecom
 command. Sessions that were already running when you enabled it stay untouched.
 
+### Serve another user on the same Mac
+
+A second macOS user that never signs in to the desktop, such as a `compass`
+service account, can draw on the same pool of Claude accounts and follow every
+switch. Turn on **Settings → Serve Another User**, then give each Claude account
+a **Compass token**: run `claude setup-token` signed in as that account and paste
+the token into **Set Compass Token…** in the account's right-click menu.
+
+Whenever the active Claude account changes, by **Use** or by Auto Swap, and at
+launch, vibecom bar writes that account's Compass token to
+`/Users/Shared/compass-auth/claude.token` (you can change the path). The other
+user reads it into `CLAUDE_CODE_OAUTH_TOKEN`. If the active account has no
+Compass token, nothing is active, or the setting is off, the file is removed
+and the other user pauses rather than running on the wrong account.
+
+Only the long-lived setup-token is ever shared. The other user never receives
+a refresh token or Claude Code's own login, so neither side can sign the other
+out. Usage tracking keeps using each account's normal login.
+
+One-time setup, as an administrator (replace `you` with the menu bar user):
+
+```bash
+sudo dseditgroup -o create compassauth
+sudo dseditgroup -o edit -a you -t user compassauth
+sudo dseditgroup -o edit -a compass -t user compassauth
+sudo mkdir -p /Users/Shared/compass-auth
+sudo chown you:compassauth /Users/Shared/compass-auth
+sudo chmod 750 /Users/Shared/compass-auth
+```
+
+The token file is written as mode 640 and takes the folder's group, so only
+you and members of `compassauth` can read it. vibecom bar never creates users,
+groups, or permissions itself. If the folder is missing, owned by someone else,
+writable by everyone, or not writable, the setting shows why and nothing is
+written. On the other user's side, read the file fresh for each session:
+
+```bash
+export CLAUDE_CODE_OAUTH_TOKEN="$(cat /Users/Shared/compass-auth/claude.token)" && claude
+```
+
 ### Follow your work as it happens
 
 See today's tokens, your live token rate, and estimated API value across both

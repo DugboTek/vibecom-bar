@@ -24,6 +24,8 @@ Codex ~/.codex/auth.json   ← explicit switch or safe token renewal
 | Account metadata | `~/Library/Application Support/VibecomBar/accounts.json` | Labels, provider, non-secret identity |
 | Preferences | `~/Library/Application Support/VibecomBar/preferences.json` | Refresh interval, display, alerts |
 | Guided profiles | `~/Library/Application Support/VibecomBar/profiles/<uuid>` | Provider configuration, not app-exported tokens |
+| Compass token (optional) | Login Keychain, `build.vibecom.bar.v2.servetoken.<uuid>` | One `claude setup-token` token per saved Claude account |
+| Served token file (optional, off by default) | `/Users/Shared/compass-auth/claude.token` or the configured path | The active account's Compass token and nothing else, mode 640 |
 
 ## Why Claude keeps ownership
 
@@ -74,6 +76,60 @@ Code would be left with a dead token. Claude Code renews its active login.
 
 Codex stores its live credential in a normal private file, so vibecom bar can
 safely write a renewed active Codex token back to that file.
+
+## Serving another local user
+
+**Settings → Serve Another User** lets a second macOS user on the same Mac (for
+example a `compass` service account that never signs in to the desktop) use
+the same Claude accounts and follow every switch. It is off by default.
+
+What crosses the user boundary is deliberately narrow:
+
+- **Only a setup-token.** Each saved Claude account can hold an optional
+  Compass token, the long-lived token `claude setup-token` prints, which the
+  other user passes as `CLAUDE_CODE_OAUTH_TOKEN`. It is pasted by the user;
+  vibecom bar never runs a login to get one. It is stored in its own Keychain
+  item, `build.vibecom.bar.v2.servetoken.<uuid>`, apart from the account's
+  OAuth pair, and it is never sent to the usage endpoint (setup-tokens lack the
+  `user:profile` scope).
+- **Never a refresh pair.** Claude refresh tokens rotate. If the other user
+  held one, a renewal on either side would sign the other out. A paste that is
+  a refresh token (`sk-ant-ort…`), anything that is not an `sk-ant-oat…` token,
+  or the saved login's own access or refresh token is refused. Claude Code's
+  live `Claude Code-credentials` item is never read or written for this.
+- **Nothing else in the file.** The file holds the token bytes only, with no
+  newline, JSON, or account details.
+
+On launch and after every change of the active Claude account, manual or
+automatic, the file is brought in line:
+
+| Situation | File |
+|---|---|
+| Setting on, active account has a Compass token | Written with that token |
+| Setting on, active account has no Compass token | Removed; the other user pauses |
+| Setting on, no saved Claude account is active | Removed |
+| Setting off | Removed |
+| Path changed | Old file removed, new one written |
+| Write fails | Old file removed, failure shown in Settings |
+
+Writes are atomic: a temp file is created in the same folder with
+`O_EXCL|O_NOFOLLOW`, set to mode 640 regardless of umask, written, `fsync`ed,
+and renamed over the target, so a reader sees the old token or the new one and
+never a partial file. A failed write deletes its temp file. An unchanged
+token is not rewritten on every refresh.
+
+vibecom bar does not create users, groups, folders, or ACLs. The expected
+layout, created once with `sudo`, is a folder owned by the menu bar user with
+group `compassauth` (the menu bar user and `compass`), mode 750. A file created
+in it takes the folder's group, so with mode 640 only the owner and that group
+can read it. Before writing, vibecom bar refuses a folder that is missing, not
+owned by the menu bar user, writable by everyone, or not writable, and shows
+why in Settings.
+
+The activity log and Settings name the account and the path, never the token.
+Tests check every log line and on-screen status for token text. The file is
+left in place when vibecom bar quits, so the other user keeps working on the
+last active account until the next change.
 
 ## Transcript privacy
 

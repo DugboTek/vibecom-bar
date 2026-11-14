@@ -40,6 +40,9 @@ VIBECOM_PARITY_CLAUDE=/path/to/vibecom swift test --filter LiveParityTests
 - Never read `Claude Code-credentials` from a timer or ordinary refresh.
 - Never create or relabel Claude Code's live Keychain item.
 - Store saved accounts only under `build.vibecom.bar.v2.account.<uuid>`.
+- Store Compass tokens only under `build.vibecom.bar.v2.servetoken.<uuid>`, and
+  never write anything but a setup-token to the served file: no refresh
+  token, no OAuth JSON, never Claude Code's live item.
 - Add a regression test for every Keychain prompt or logout bug.
 
 ## Screenshots

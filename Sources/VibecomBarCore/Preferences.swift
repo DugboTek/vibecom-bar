@@ -13,6 +13,10 @@ public struct Preferences: Codable, Equatable, Sendable {
     public var blurAccountNames: Bool = false
     public var autoSwapEnabled: Bool = false
     public var liveRelayEnabled: Bool = false
+    /// Write the active Claude account's setup-token to a file another macOS
+    /// user on this Mac reads. Off until the user turns it on.
+    public var serveLocalUserEnabled: Bool = false
+    public var serveLocalUserPath: String = ServeSettings.defaultPath
 
     public init() {}
 
@@ -27,6 +31,9 @@ public struct Preferences: Codable, Equatable, Sendable {
         blurAccountNames = try values.decodeIfPresent(Bool.self, forKey: .blurAccountNames) ?? false
         autoSwapEnabled = try values.decodeIfPresent(Bool.self, forKey: .autoSwapEnabled) ?? false
         liveRelayEnabled = try values.decodeIfPresent(Bool.self, forKey: .liveRelayEnabled) ?? false
+        serveLocalUserEnabled = try values.decodeIfPresent(Bool.self, forKey: .serveLocalUserEnabled) ?? false
+        serveLocalUserPath =
+            try values.decodeIfPresent(String.self, forKey: .serveLocalUserPath) ?? ServeSettings.defaultPath
         refreshInterval = storedRefreshInterval
     }
 
@@ -43,7 +50,7 @@ public struct Preferences: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case storedRefreshInterval = "refreshInterval"
         case menuBarStyle, alertThresholds, notifyOnReset, showInactiveAccounts, launchAtLogin,
-            blurAccountNames, autoSwapEnabled, liveRelayEnabled
+            blurAccountNames, autoSwapEnabled, liveRelayEnabled, serveLocalUserEnabled, serveLocalUserPath
     }
 }
 
