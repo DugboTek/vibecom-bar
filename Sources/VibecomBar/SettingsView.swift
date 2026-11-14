@@ -298,7 +298,7 @@ struct SettingsView: View {
     private var serveStatusIcon: String {
         switch model.serveStatus {
         case .serving: "checkmark.circle.fill"
-        case .failed: "exclamationmark.triangle.fill"
+        case .failed, .foreignFile: "exclamationmark.triangle.fill"
         case .pausedNoToken, .pausedNoActiveAccount: "pause.circle"
         case .off: "circle"
         }
@@ -307,7 +307,7 @@ struct SettingsView: View {
     private var serveStatusTint: AnyShapeStyle {
         switch model.serveStatus {
         case .serving: AnyShapeStyle(.green)
-        case .failed: AnyShapeStyle(.orange)
+        case .failed, .foreignFile: AnyShapeStyle(.orange)
         default: AnyShapeStyle(.secondary)
         }
     }

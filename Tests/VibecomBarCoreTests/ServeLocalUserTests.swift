@@ -27,11 +27,22 @@ private final class CountingFileSystem: ServeFileSystem, @unchecked Sendable {
         lock.withLock { writeCount += 1 }
         try base.writeAtomically(data, to: url, mode: mode)
     }
+    func entry(at url: URL) -> ServeFileEntry { base.entry(at: url) }
     func remove(_ url: URL) throws { try base.remove(url) }
     func groupName(of url: URL) -> String? { base.groupName(of: url) }
 }
 
 private struct InjectedFailure: Error {}
+
+/// Which file the server wrote, kept in memory and shared by every server a
+/// test creates, the way the real record survives a relaunch.
+private final class MemoryOwnershipStore: ServeOwnershipStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: ServedFileRecord?
+    var record: ServedFileRecord? { lock.withLock { stored } }
+    func load() -> ServedFileRecord? { lock.withLock { stored } }
+    func save(_ record: ServedFileRecord?) throws { lock.withLock { stored = record } }
+}
 
 private let tokenA = "sk-ant-oat01-AAAA_served_token_for_alpha_0123456789"
 private let tokenB = "sk-ant-oat01-BBBB_served_token_for_bravo_9876543210"
@@ -42,6 +53,7 @@ private let refreshToken = "sk-ant-ort01-rotating-refresh-token-never-served"
 /// user, mode 750.
 private struct Sandbox {
     let folder: URL
+    let ownership = MemoryOwnershipStore()
     var target: URL { folder.appendingPathComponent("claude.token") }
 
     init() throws {
@@ -97,7 +109,7 @@ struct ServeLocalUserTests {
         let alpha = account("alpha@example.com")
         let bravo = account("bravo@example.com")
         let store = try await tokens([alpha.id: tokenA, bravo.id: tokenB])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
 
         let first = await server.sync(settings: box.settings(), active: alpha, tokens: store)
         #expect(first == .serving(account: alpha.label, path: box.target.path, group: first.group))
@@ -118,7 +130,7 @@ struct ServeLocalUserTests {
         let alpha = account("alpha@example.com")
         let store = try await tokens([alpha.id: tokenA])
         let files = CountingFileSystem()
-        let server = LocalUserServer(files: files, log: { _ in })
+        let server = LocalUserServer(files: files, ownership: box.ownership, log: { _ in })
 
         for _ in 0..<5 { await server.sync(settings: box.settings(), active: alpha, tokens: store) }
 
@@ -132,7 +144,7 @@ struct ServeLocalUserTests {
         defer { box.cleanUp() }
         let alpha = account("alpha@example.com")
         let store = try await tokens([alpha.id: tokenA])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
         await server.sync(settings: box.settings(), active: alpha, tokens: store)
         chmod(box.target.path, 0o644)
 
@@ -148,7 +160,7 @@ struct ServeLocalUserTests {
         let alpha = account("alpha@example.com")
         let bravo = account("bravo@example.com")
         let store = try await tokens([alpha.id: tokenA, bravo.id: tokenB])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
 
         async let older = server.sync(settings: box.settings(), active: alpha, tokens: store)
         async let newer = server.sync(settings: box.settings(), active: bravo, tokens: store)
@@ -169,7 +181,7 @@ struct ServeLocalUserTests {
         let alpha = account("alpha@example.com")
         let bare = account("bare@example.com")
         let store = try await tokens([alpha.id: tokenA])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
         await server.sync(settings: box.settings(), active: alpha, tokens: store)
         #expect(box.exists)
 
@@ -185,7 +197,7 @@ struct ServeLocalUserTests {
         defer { box.cleanUp() }
         let alpha = account("alpha@example.com")
         let store = try await tokens([alpha.id: tokenA])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
         await server.sync(settings: box.settings(), active: alpha, tokens: store)
 
         let status = await server.sync(settings: box.settings(), active: nil, tokens: store)
@@ -200,7 +212,7 @@ struct ServeLocalUserTests {
         defer { box.cleanUp() }
         let codex = StoredAccount(provider: .codex, label: "codex@example.com", identity: AccountIdentity())
         let store = try await tokens([codex.id: tokenA])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
 
         let status = await server.sync(settings: box.settings(), active: codex, tokens: store)
 
@@ -215,7 +227,7 @@ struct ServeLocalUserTests {
         let alpha = account("alpha@example.com")
         let secrets = MemorySecretStore()
         let store = try await tokens([alpha.id: tokenA], secrets: secrets)
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
         await server.sync(settings: box.settings(), active: alpha, tokens: store)
 
         try await store.remove(for: alpha.id)
@@ -234,7 +246,7 @@ struct ServeLocalUserTests {
         defer { box.cleanUp() }
         let alpha = account("alpha@example.com")
         let store = try await tokens([alpha.id: tokenA])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
         await server.sync(settings: box.settings(), active: alpha, tokens: store)
         #expect(box.exists)
 
@@ -244,7 +256,7 @@ struct ServeLocalUserTests {
         #expect(!box.exists)
     }
 
-    @Test("with the setting off, a file already at the path is removed and nothing is written")
+    @Test("with the setting off, a file vibecom bar didn't write is left alone and nothing is written")
     func settingOffNeverWrites() async throws {
         let box = try Sandbox()
         defer { box.cleanUp() }
@@ -252,12 +264,12 @@ struct ServeLocalUserTests {
         let alpha = account("alpha@example.com")
         let store = try await tokens([alpha.id: tokenA])
         let files = CountingFileSystem()
-        let server = LocalUserServer(files: files, log: { _ in })
+        let server = LocalUserServer(files: files, ownership: box.ownership, log: { _ in })
 
         let status = await server.sync(settings: box.settings(enabled: false), active: alpha, tokens: store)
 
         #expect(status == .off)
-        #expect(!box.exists)
+        #expect(box.contents == "left over")
         #expect(files.writes == 0)
     }
 
@@ -284,7 +296,7 @@ struct ServeLocalUserTests {
         defer { box.cleanUp() }
         let alpha = account("alpha@example.com")
         let store = try await tokens([alpha.id: tokenA])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
         await server.sync(settings: box.settings(), active: alpha, tokens: store)
 
         let moved = box.folder.appendingPathComponent("moved.token")
@@ -304,7 +316,7 @@ struct ServeLocalUserTests {
         let missing = box.folder.appendingPathComponent("absent", isDirectory: true)
         let alpha = account("alpha@example.com")
         let store = try await tokens([alpha.id: tokenA])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
 
         let status = await server.sync(
             settings: ServeSettings(isEnabled: true, path: missing.appendingPathComponent("claude.token").path),
@@ -325,7 +337,7 @@ struct ServeLocalUserTests {
         chmod(box.folder.path, 0o550)
         let alpha = account("alpha@example.com")
         let store = try await tokens([alpha.id: tokenA])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
 
         let status = await server.sync(settings: box.settings(), active: alpha, tokens: store)
 
@@ -340,7 +352,7 @@ struct ServeLocalUserTests {
         chmod(box.folder.path, 0o777)
         let alpha = account("alpha@example.com")
         let store = try await tokens([alpha.id: tokenA])
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
 
         let status = await server.sync(settings: box.settings(), active: alpha, tokens: store)
 
@@ -354,6 +366,9 @@ struct ServeLocalUserTests {
         #expect(ServeSettings.problem(with: "claude.token") != nil)
         #expect(ServeSettings.problem(with: "/Users/Shared/compass-auth/") != nil)
         #expect(ServeSettings.problem(with: "/Users/Shared/../etc/claude.token") != nil)
+        #expect(ServeSettings.problem(with: "/Users/someone/.zshrc") != nil)
+        #expect(ServeSettings.problem(with: "/Users/someone/Documents/notes.txt") != nil)
+        #expect(ServeSettings.problem(with: "/Users/Shared/compass-auth/.token") != nil)
         #expect(ServeSettings.problem(with: ServeSettings.defaultPath) == nil)
     }
 
@@ -414,9 +429,9 @@ struct ServeLocalUserTests {
         let failOnBravo = AtomicFileWriter(fault: { stage in
             if stage == .wrote { throw ServeFileError.io(step: "write", path: "test", code: EIO) }
         })
-        let healthy = LocalUserServer(log: { _ in })
+        let healthy = LocalUserServer(ownership: box.ownership, log: { _ in })
         await healthy.sync(settings: box.settings(), active: alpha, tokens: store)
-        let server = LocalUserServer(files: DiskServeFileSystem(writer: failOnBravo), log: { _ in })
+        let server = LocalUserServer(files: DiskServeFileSystem(writer: failOnBravo), ownership: box.ownership, log: { _ in })
 
         let status = await server.sync(settings: box.settings(), active: bravo, tokens: store)
 
@@ -441,7 +456,7 @@ struct ServeLocalUserTests {
         let bravo = account("bravo@example.com")
         let bare = account("bare@example.com")
         let store = try await tokens([alpha.id: tokenA, bravo.id: tokenB])
-        let server = LocalUserServer(log: {
+        let server = LocalUserServer(ownership: box.ownership, log: {
             sink.record($0)
             activityLog.record($0)
         })
@@ -458,6 +473,7 @@ struct ServeLocalUserTests {
         chmod(box.folder.path, 0o750)
         let failing = LocalUserServer(
             files: DiskServeFileSystem(writer: AtomicFileWriter(fault: { _ in throw InjectedFailure() })),
+            ownership: box.ownership,
             log: {
                 sink.record($0)
                 activityLog.record($0)
@@ -521,7 +537,7 @@ struct ServeLocalUserTests {
             provider: .claude, identity: AccountIdentity(email: "alpha@example.com"), secret: .claude(pair))
         let store = ServeTokenStore(secrets: secrets)
         try await store.set(try ServeToken.validate(tokenA, savedLogin: pair), for: alpha.id)
-        let server = LocalUserServer(log: { _ in })
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
 
         let status = await server.sync(settings: box.settings(), active: alpha, tokens: store)
 
@@ -585,5 +601,184 @@ extension ServeStatus {
     fileprivate var group: String? {
         if case .serving(_, _, let group) = self { return group }
         return nil
+    }
+}
+
+/// Only a file vibecom bar itself wrote, and that is still exactly that file,
+/// may ever be replaced or removed. A mistyped path must never cost the user a
+/// file, and a symlink must never be followed.
+@Suite("Serve another local user: never touches files it didn't write")
+struct ServeOwnershipTests {
+    enum Scenario: String, CaseIterable, Sendable {
+        case settingOff, settingOnWithToken, noToken, noActiveAccount, pathChange, writeFailure
+    }
+
+    private static let foreignText = "export SECRET_SETTINGS=keep-me\n"
+
+    /// Runs one scenario against whatever is at the box's target path.
+    private func run(
+        _ scenario: Scenario, box: Sandbox, server: LocalUserServer, alpha: StoredAccount,
+        bare: StoredAccount, store: ServeTokenStore
+    ) async -> ServeStatus {
+        switch scenario {
+        case .settingOff:
+            return await server.sync(settings: box.settings(enabled: false), active: alpha, tokens: store)
+        case .settingOnWithToken, .writeFailure:
+            return await server.sync(settings: box.settings(), active: alpha, tokens: store)
+        case .noToken:
+            return await server.sync(settings: box.settings(), active: bare, tokens: store)
+        case .noActiveAccount:
+            return await server.sync(settings: box.settings(), active: nil, tokens: store)
+        case .pathChange:
+            let elsewhere = box.folder.appendingPathComponent("elsewhere.token")
+            return await server.sync(
+                settings: ServeSettings(isEnabled: true, path: elsewhere.path), active: alpha, tokens: store)
+        }
+    }
+
+    private func server(for scenario: Scenario, box: Sandbox) -> LocalUserServer {
+        let files =
+            scenario == .writeFailure
+            ? DiskServeFileSystem(writer: AtomicFileWriter(fault: { _ in throw InjectedFailure() }))
+            : DiskServeFileSystem()
+        return LocalUserServer(files: files, ownership: box.ownership, log: { _ in })
+    }
+
+    @Test("a file someone else put at the path survives every situation", arguments: Scenario.allCases)
+    func foreignFileSurvives(_ scenario: Scenario) async throws {
+        let box = try Sandbox()
+        defer { box.cleanUp() }
+        let alpha = account("alpha@example.com")
+        let bare = account("bare@example.com")
+        let store = try await tokens([alpha.id: tokenA])
+        try Data(Self.foreignText.utf8).write(to: box.target)
+        // For a path change, the foreign file is at the old path, which the
+        // server has never written: it must not be cleaned up as "ours".
+        let server = server(for: scenario, box: box)
+
+        let status = await run(scenario, box: box, server: server, alpha: alpha, bare: bare, store: store)
+
+        #expect(box.contents == Self.foreignText, "\(scenario)")
+        if scenario != .settingOff && scenario != .pathChange {
+            #expect(status == .foreignFile(path: box.target.path), "\(scenario)")
+            #expect(status.isFailure)
+        }
+        #expect(box.ownership.record?.path != box.target.path)
+    }
+
+    @Test("a file swapped in after vibecom bar wrote is no longer treated as its own")
+    func replacedFileIsForeign() async throws {
+        let box = try Sandbox()
+        defer { box.cleanUp() }
+        let alpha = account("alpha@example.com")
+        let store = try await tokens([alpha.id: tokenA])
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
+        await server.sync(settings: box.settings(), active: alpha, tokens: store)
+        #expect(box.contents == tokenA)
+
+        // Someone replaces the file with their own (a new inode at the same path).
+        try FileManager.default.removeItem(at: box.target)
+        try Data(Self.foreignText.utf8).write(to: box.target)
+
+        let off = await server.sync(settings: box.settings(enabled: false), active: alpha, tokens: store)
+        #expect(off == .off)
+        #expect(box.contents == Self.foreignText)
+        let on = await server.sync(settings: box.settings(), active: alpha, tokens: store)
+        #expect(on == .foreignFile(path: box.target.path))
+        #expect(box.contents == Self.foreignText)
+    }
+
+    @Test("a symlink at the path is never followed, replaced or removed", arguments: Scenario.allCases)
+    func symlinkIsNeverTouched(_ scenario: Scenario) async throws {
+        let box = try Sandbox()
+        defer { box.cleanUp() }
+        let victim = box.folder.appendingPathComponent("victim.txt")
+        try Data(Self.foreignText.utf8).write(to: victim)
+        try FileManager.default.createSymbolicLink(at: box.target, withDestinationURL: victim)
+        let alpha = account("alpha@example.com")
+        let bare = account("bare@example.com")
+        let store = try await tokens([alpha.id: tokenA])
+        let server = server(for: scenario, box: box)
+
+        let status = await run(scenario, box: box, server: server, alpha: alpha, bare: bare, store: store)
+
+        let link = try FileManager.default.destinationOfSymbolicLink(atPath: box.target.path)
+        #expect(link == victim.path, "\(scenario)")
+        #expect(String(decoding: try Data(contentsOf: victim), as: UTF8.self) == Self.foreignText, "\(scenario)")
+        if scenario != .settingOff && scenario != .pathChange {
+            #expect(status == .foreignFile(path: box.target.path), "\(scenario)")
+        }
+    }
+
+    @Test(
+        "vibecom bar's own file is still removed when it must stop serving",
+        arguments: [Scenario.settingOff, .noToken, .noActiveAccount, .pathChange, .writeFailure])
+    func ownFileIsRemoved(_ scenario: Scenario) async throws {
+        let box = try Sandbox()
+        defer { box.cleanUp() }
+        let alpha = account("alpha@example.com")
+        let bravo = account("bravo@example.com")
+        let bare = account("bare@example.com")
+        let store = try await tokens([alpha.id: tokenA, bravo.id: tokenB])
+        let writer = LocalUserServer(ownership: box.ownership, log: { _ in })
+        // Bravo first, so the write-failure case is a switch to alpha that fails.
+        await writer.sync(settings: box.settings(), active: bravo, tokens: store)
+        #expect(box.contents == tokenB)
+        #expect(box.ownership.record?.path == box.target.path)
+        // A fresh server, as after a relaunch, relying on the saved record.
+        let server = server(for: scenario, box: box)
+
+        _ = await run(scenario, box: box, server: server, alpha: alpha, bare: bare, store: store)
+
+        #expect(!box.exists, "\(scenario)")
+        #expect(box.strayFiles.filter { $0 != "elsewhere.token" }.isEmpty, "\(scenario)")
+        if scenario == .pathChange {
+            let elsewhere = box.folder.appendingPathComponent("elsewhere.token")
+            #expect(String(decoding: try Data(contentsOf: elsewhere), as: UTF8.self) == tokenA)
+            #expect(box.ownership.record?.path == elsewhere.path)
+        } else {
+            #expect(box.ownership.record == nil, "\(scenario)")
+        }
+    }
+
+    @Test("with no record of writing it, nothing at the path is removed, even a token file")
+    func noRecordMeansHandsOff() async throws {
+        let box = try Sandbox()
+        defer { box.cleanUp() }
+        let alpha = account("alpha@example.com")
+        let store = try await tokens([alpha.id: tokenA])
+        let writer = LocalUserServer(ownership: box.ownership, log: { _ in })
+        await writer.sync(settings: box.settings(), active: alpha, tokens: store)
+        // A server that lost its record (or never had one) must not assume.
+        let amnesiac = LocalUserServer(ownership: MemoryOwnershipStore(), log: { _ in })
+
+        let status = await amnesiac.sync(settings: box.settings(enabled: false), active: alpha, tokens: store)
+
+        #expect(status == .off)
+        #expect(box.contents == tokenA)
+    }
+
+    @Test("the saved record holds the path and file metadata, nothing derived from the token")
+    func recordHasNoToken() async throws {
+        let box = try Sandbox()
+        defer { box.cleanUp() }
+        let files = MemoryFileStore()
+        let url = URL(fileURLWithPath: "/support/served-file.json")
+        let ownership = FileServeOwnershipStore(files: files, url: url)
+        let alpha = account("alpha@example.com")
+        let store = try await tokens([alpha.id: tokenA])
+        let server = LocalUserServer(ownership: ownership, log: { _ in })
+
+        await server.sync(settings: box.settings(), active: alpha, tokens: store)
+
+        let saved = try #require(files.contents(at: url.path))
+        let text = String(decoding: saved, as: UTF8.self)
+        #expect(!text.contains("sk-ant-"))
+        #expect(ownership.load()?.path == box.target.path)
+        // A relaunched server reads it back and can clean up its own file.
+        let relaunched = LocalUserServer(ownership: ownership, log: { _ in })
+        await relaunched.sync(settings: box.settings(enabled: false), active: alpha, tokens: store)
+        #expect(!box.exists)
+        #expect(files.contents(at: url.path) == nil)
     }
 }

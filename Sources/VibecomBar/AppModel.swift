@@ -128,7 +128,10 @@ final class AppModel {
         vibecomStandingService = VibecomStandingService()
         vault = AccountVault(secrets: KeychainSecretStore(), files: files, directory: support)
         serveTokens = ServeTokenStore(secrets: KeychainSecretStore())
-        localUserServer = LocalUserServer(log: { activityLog.record($0) })
+        localUserServer = LocalUserServer(
+            ownership: FileServeOwnershipStore(
+                files: files, url: support.appendingPathComponent("served-file.json")),
+            log: { activityLog.record($0) })
         activator = AccountActivator(vault: vault, environment: environment)
         monitor = AccountMonitor(vault: vault, activator: activator, environment: environment)
         importer = AccountImporter(environment: environment)

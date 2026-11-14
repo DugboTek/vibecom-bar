@@ -126,7 +126,10 @@ public struct ServeSettings: Equatable, Sendable {
         self.init(isEnabled: preferences.serveLocalUserEnabled, path: preferences.serveLocalUserPath)
     }
 
-    /// Why a path can't be used, or nil when it can.
+    public static let requiredExtension = "token"
+
+    /// Why a path can't be used, or nil when it can. The `.token` ending keeps
+    /// a mistyped path from naming a file someone cares about.
     public static func problem(with path: String) -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Enter the full path of the token file." }
@@ -135,6 +138,8 @@ public struct ServeSettings: Equatable, Sendable {
         let name = (trimmed as NSString).lastPathComponent
         guard name != ".", name != ".." else { return "The path must name a file, not a folder." }
         guard !trimmed.split(separator: "/").contains("..") else { return "The path can't contain “..”." }
+        guard (name as NSString).pathExtension == requiredExtension, name.count > requiredExtension.count + 1
+        else { return "The file name must end in .\(requiredExtension), for example claude.token." }
         return nil
     }
 }
@@ -172,13 +177,45 @@ public enum ServeFileError: Error, Equatable, Sendable {
 
 /// The few file operations serving needs, behind a seam so tests can check
 /// the policy without touching a real shared folder.
+/// Identifies one particular file, so the app can tell the file it wrote from
+/// anything else later found at the same path. Derived from metadata only,
+/// never from the token.
+public struct FileStamp: Codable, Equatable, Sendable {
+    public var device: Int64
+    public var inode: UInt64
+    public var size: Int64
+    public var modifiedSeconds: Int64
+    public var modifiedNanoseconds: Int64
+
+    public init(device: Int64, inode: UInt64, size: Int64, modifiedSeconds: Int64, modifiedNanoseconds: Int64) {
+        self.device = device
+        self.inode = inode
+        self.size = size
+        self.modifiedSeconds = modifiedSeconds
+        self.modifiedNanoseconds = modifiedNanoseconds
+    }
+}
+
+/// What is at a path, without following a symlink there.
+public enum ServeFileEntry: Equatable, Sendable {
+    case absent
+    case regular(FileStamp)
+    case symlink
+    /// A folder, socket or anything else that isn't a plain file.
+    case other
+    case unreadable(Int32)
+}
+
 public protocol ServeFileSystem: Sendable {
     /// Throws when the folder can't hold the token safely.
     func checkFolder(_ folder: URL) throws
+    /// What is at `url`, by lstat: a symlink is reported, never followed.
+    func entry(at url: URL) -> ServeFileEntry
     /// The current contents and mode, or nil when there is no regular file.
     func current(_ url: URL) -> (data: Data, mode: mode_t)?
     func writeAtomically(_ data: Data, to url: URL, mode: mode_t) throws
-    /// Removing a file that is already gone succeeds.
+    /// Removing a file that is already gone succeeds. Callers only remove a
+    /// file they have just confirmed is the one they wrote.
     func remove(_ url: URL) throws
     /// The group the file or folder belongs to, for the status line.
     func groupName(of url: URL) -> String?
@@ -262,6 +299,23 @@ public struct DiskServeFileSystem: ServeFileSystem {
         guard access(folder.path, W_OK | X_OK) == 0 else { throw ServeFileError.folderNotWritable(folder.path) }
     }
 
+    public func entry(at url: URL) -> ServeFileEntry {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else {
+            return errno == ENOENT || errno == ENOTDIR ? .absent : .unreadable(errno)
+        }
+        switch info.st_mode & S_IFMT {
+        case S_IFLNK: return .symlink
+        case S_IFREG:
+            return .regular(
+                FileStamp(
+                    device: Int64(info.st_dev), inode: UInt64(info.st_ino), size: Int64(info.st_size),
+                    modifiedSeconds: Int64(info.st_mtimespec.tv_sec),
+                    modifiedNanoseconds: Int64(info.st_mtimespec.tv_nsec)))
+        default: return .other
+        }
+    }
+
     public func current(_ url: URL) -> (data: Data, mode: mode_t)? {
         let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { return nil }
@@ -292,6 +346,53 @@ public struct DiskServeFileSystem: ServeFileSystem {
     }
 }
 
+// MARK: - Remembering which file is ours
+
+/// The one file this app wrote and may therefore replace or remove.
+public struct ServedFileRecord: Codable, Equatable, Sendable {
+    public var path: String
+    public var stamp: FileStamp
+
+    public init(path: String, stamp: FileStamp) {
+        self.path = path
+        self.stamp = stamp
+    }
+}
+
+/// Keeps the record across launches, so a file written before a restart can
+/// still be cleaned up, and nothing else ever is.
+public protocol ServeOwnershipStore: Sendable {
+    func load() -> ServedFileRecord?
+    func save(_ record: ServedFileRecord?) throws
+}
+
+/// A small JSON file in the app's support folder. It holds the path and file
+/// metadata only, nothing derived from the token.
+public struct FileServeOwnershipStore: ServeOwnershipStore {
+    private let files: FileStore
+    private let url: URL
+
+    public init(files: FileStore, url: URL) {
+        self.files = files
+        self.url = url
+    }
+
+    public func load() -> ServedFileRecord? {
+        guard let data = (try? files.read(url)) ?? nil else { return nil }
+        return try? JSONDecoder().decode(ServedFileRecord.self, from: data)
+    }
+
+    public func save(_ record: ServedFileRecord?) throws {
+        guard let record else {
+            try files.remove(url)
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try files.write(try encoder.encode(record), to: url)
+    }
+}
+
 // MARK: - Keeping the file in step with the active account
 
 public enum ServeStatus: Equatable, Sendable {
@@ -301,6 +402,8 @@ public enum ServeStatus: Equatable, Sendable {
     /// The file was removed, so the other user pauses until this changes.
     case pausedNoActiveAccount
     case pausedNoToken(account: String)
+    /// Something vibecom bar didn't write is at the path. It is left alone.
+    case foreignFile(path: String)
     case failed(String)
 
     public var message: String { message(showingAccount: true) }
@@ -317,33 +420,49 @@ public enum ServeStatus: Equatable, Sendable {
         case .pausedNoToken(let account):
             let subject = showingAccount ? account : "The active account"
             return "Paused: \(subject) has no Compass token. Add one from its menu."
+        case .foreignFile(let path):
+            return "A file vibecom bar did not write is at \(path); not touching it. Move it away or choose another path."
         case .failed(let message): return message
         }
     }
 
-    public var isFailure: Bool { if case .failed = self { true } else { false } }
+    public var isFailure: Bool {
+        switch self {
+        case .failed, .foreignFile: true
+        default: false
+        }
+    }
 }
 
-/// Writes the active account's setup-token to the shared file, or removes the
-/// file. Nothing else is ever written there, and the token never reaches the
-/// log or the status shown on screen: both name the account only.
+/// Writes the active account's setup-token to the shared file, or removes it.
+/// It only ever replaces or removes a file it can prove it wrote itself (same
+/// path, same device, inode, size and modification time, and a plain file,
+/// not a symlink). Anything else found at the path is left exactly as it is.
+/// Nothing but the token is ever written, and the token never reaches the log
+/// or the status shown on screen: both name the account only.
 public final class LocalUserServer: @unchecked Sendable {
     public static let fileMode: mode_t = 0o640
 
     private let files: ServeFileSystem
+    private let ownership: ServeOwnershipStore
     private let log: @Sendable (String) -> Void
     private let lock = NSLock()
-    /// The path last written, so changing the setting cleans up the old file.
-    private var lastServedPath: String?
+    /// The file this app last wrote, if it still stands.
+    private var record: ServedFileRecord?
     private var lastStatus: ServeStatus?
     /// Syncs can overlap while one waits on the keychain. Only the newest one
     /// may touch the file, so an older active account can't win the race.
     private var issuedTickets = 0
     private var appliedTicket = 0
 
-    public init(files: ServeFileSystem = DiskServeFileSystem(), log: @escaping @Sendable (String) -> Void) {
+    public init(
+        files: ServeFileSystem = DiskServeFileSystem(), ownership: ServeOwnershipStore,
+        log: @escaping @Sendable (String) -> Void
+    ) {
         self.files = files
+        self.ownership = ownership
         self.log = log
+        record = ownership.load()
     }
 
     /// Brings the file in line with the setting and the active account. Safe to
@@ -371,7 +490,7 @@ public final class LocalUserServer: @unchecked Sendable {
             if tokenReadFailed, let active {
                 // Not knowing the token is not the same as having none, but the
                 // safe side is still to stop serving the previous account's.
-                status = removeOrFail(
+                status = withdraw(
                     settings.path,
                     otherwise: .failed("Couldn't read \(active.label)'s Compass token from the keychain."))
             } else {
@@ -385,55 +504,125 @@ public final class LocalUserServer: @unchecked Sendable {
         }
     }
 
-    private func apply(settings: ServeSettings, active: StoredAccount?, token: String?) -> ServeStatus {
-        // A file left at a previous path would keep serving a stale account.
-        if let previous = lastServedPath, previous != settings.path {
+    private enum Ownership {
+        case nothing
+        case ours(FileStamp)
+        case foreign
+    }
+
+    /// Whether what is at `path` is the file this app wrote.
+    private func ownership(of path: String) -> Ownership {
+        switch files.entry(at: URL(fileURLWithPath: path)) {
+        case .absent: return .nothing
+        case .regular(let stamp):
+            if let record, record.path == path, record.stamp == stamp { return .ours(stamp) }
+            return .foreign
+        case .symlink, .other, .unreadable: return .foreign
+        }
+    }
+
+    private func remember(_ newRecord: ServedFileRecord?) {
+        guard newRecord != record else { return }
+        record = newRecord
+        do {
+            try ownership.save(newRecord)
+        } catch {
+            log("Serve another user: couldn't save which file it wrote (\(type(of: error))).")
+        }
+    }
+
+    private enum Removal {
+        case removed
+        case leftForeign
+        case failed(String)
+    }
+
+    /// Removes the file at `path` only if this app wrote it.
+    private func removeIfOurs(_ path: String) -> Removal {
+        switch ownership(of: path) {
+        case .nothing:
+            if record?.path == path { remember(nil) }
+            return .removed
+        case .foreign:
+            // Whatever was ours there is gone; never claim the new file.
+            if record?.path == path { remember(nil) }
+            return .leftForeign
+        case .ours:
             do {
-                try files.remove(URL(fileURLWithPath: previous))
-                lastServedPath = nil
-            } catch let error as ServeFileError {
-                return .failed("Couldn't remove the old token file: \(error.message)")
+                try files.remove(URL(fileURLWithPath: path))
+                remember(nil)
+                return .removed
             } catch {
-                return .failed("Couldn't remove the old token file at \(previous).")
+                return .failed(Self.describe(error))
+            }
+        }
+    }
+
+    private func apply(settings: ServeSettings, active: StoredAccount?, token: String?) -> ServeStatus {
+        // A file of ours left at a previous path would keep serving a stale
+        // account. A file someone else put there is theirs and stays.
+        if let previous = record?.path, previous != settings.path {
+            if case .failed(let reason) = removeIfOurs(previous) {
+                return .failed("Couldn't remove the old token file at \(previous): \(reason)")
             }
         }
 
-        guard settings.isEnabled else { return removeOrFail(settings.path, otherwise: .off) }
+        guard settings.isEnabled else {
+            // Off: clean up only a file this app wrote; otherwise do nothing.
+            if record?.path == settings.path, case .failed(let reason) = removeIfOurs(settings.path) {
+                return .failed("Couldn't remove the token file, so the other user may still be served: \(reason)")
+            }
+            return .off
+        }
         if let problem = ServeSettings.problem(with: settings.path) { return .failed(problem) }
         guard let active, active.provider == .claude else {
-            return removeOrFail(settings.path, otherwise: .pausedNoActiveAccount)
+            return withdraw(settings.path, otherwise: .pausedNoActiveAccount)
         }
         guard let token else {
-            return removeOrFail(settings.path, otherwise: .pausedNoToken(account: active.label))
+            return withdraw(settings.path, otherwise: .pausedNoToken(account: active.label))
         }
 
         let url = URL(fileURLWithPath: settings.path)
         let data = Data(token.utf8)
         do {
             try files.checkFolder(url.deletingLastPathComponent())
-            if let existing = files.current(url), existing.data == data, existing.mode == Self.fileMode {
-                // Already current.
-            } else {
-                try files.writeAtomically(data, to: url, mode: Self.fileMode)
+            switch ownership(of: settings.path) {
+            case .foreign:
+                return .foreignFile(path: settings.path)
+            case .ours(let stamp):
+                if let existing = files.current(url), existing.data == data, existing.mode == Self.fileMode {
+                    remember(ServedFileRecord(path: settings.path, stamp: stamp))
+                } else {
+                    try write(data, to: url)
+                }
+            case .nothing:
+                try write(data, to: url)
             }
-            lastServedPath = settings.path
             return .serving(account: active.label, path: settings.path, group: files.groupName(of: url))
         } catch {
             // A write that failed must not leave the previous account's token
-            // being served as if it were current.
-            try? files.remove(url)
+            // being served as if it were current, but only our own file goes.
+            _ = removeIfOurs(settings.path)
             return .failed(Self.describe(error))
         }
     }
 
-    private func removeOrFail(_ path: String, otherwise status: ServeStatus) -> ServeStatus {
+    private func write(_ data: Data, to url: URL) throws {
+        try files.writeAtomically(data, to: url, mode: Self.fileMode)
+        guard case .regular(let stamp) = files.entry(at: url) else {
+            throw ServeFileError.io(step: "confirm", path: url.path, code: ENOENT)
+        }
+        remember(ServedFileRecord(path: url.path, stamp: stamp))
+    }
+
+    /// Stops serving at `path`: removes our file, or reports a foreign one.
+    private func withdraw(_ path: String, otherwise status: ServeStatus) -> ServeStatus {
         guard ServeSettings.problem(with: path) == nil else { return status }
-        do {
-            try files.remove(URL(fileURLWithPath: path))
-            if lastServedPath == path { lastServedPath = nil }
-            return status
-        } catch {
-            return .failed("Couldn't remove the token file, so the other user may still be served: \(Self.describe(error))")
+        switch removeIfOurs(path) {
+        case .removed: return status
+        case .leftForeign: return .foreignFile(path: path)
+        case .failed(let reason):
+            return .failed("Couldn't remove the token file, so the other user may still be served: \(reason)")
         }
     }
 

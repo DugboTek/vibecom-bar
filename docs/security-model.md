@@ -26,6 +26,7 @@ Codex ~/.codex/auth.json   ← explicit switch or safe token renewal
 | Guided profiles | `~/Library/Application Support/VibecomBar/profiles/<uuid>` | Provider configuration, not app-exported tokens |
 | Compass token (optional) | Login Keychain, `build.vibecom.bar.v2.servetoken.<uuid>` | One `claude setup-token` token per saved Claude account |
 | Served token file (optional, off by default) | `/Users/Shared/compass-auth/claude.token` or the configured path | The active account's Compass token and nothing else, mode 640 |
+| Served file record | `~/Library/Application Support/VibecomBar/served-file.json` | Path, device, inode, size and modification time of the token file vibecom bar last wrote; nothing derived from the token |
 
 ## Why Claude keeps ownership
 
@@ -108,9 +109,22 @@ automatic, the file is brought in line:
 | Setting on, active account has a Compass token | Written with that token |
 | Setting on, active account has no Compass token | Removed; the other user pauses |
 | Setting on, no saved Claude account is active | Removed |
-| Setting off | Removed |
+| Setting off | Removed, only if vibecom bar wrote it; otherwise nothing is done |
 | Path changed | Old file removed, new one written |
 | Write fails | Old file removed, failure shown in Settings |
+
+**Only its own file is ever replaced or removed.** Every "written" and
+"removed" above applies only to the file vibecom bar itself wrote. After each
+write it records that file's path, device, inode, size and modification time
+in `served-file.json`. Before replacing or deleting anything it checks the path
+with `lstat` and acts only if a plain file with exactly that record is there.
+Anything else is left untouched and Settings says "A file vibecom bar did not
+write is at <path>; not touching it". That includes a file you made, a file
+swapped in after vibecom bar wrote, a symlink (never followed), or a folder.
+The file name must also end in `.token`, so a mistyped path such as
+`~/.zshrc` is refused before anything is touched. If vibecom bar is killed
+between writing the file and saving the record, it treats the file as
+someone else's. Delete it by hand once and serving resumes.
 
 Writes are atomic: a temp file is created in the same folder with
 `O_EXCL|O_NOFOLLOW`, set to mode 640 regardless of umask, written, `fsync`ed,

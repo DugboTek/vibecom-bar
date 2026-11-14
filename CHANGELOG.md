@@ -13,8 +13,10 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
   Compass token (pasted from `claude setup-token`, stored in the Keychain);
   the active account's token is written atomically, mode 640, to
   `/Users/Shared/compass-auth/claude.token`, and the file is removed when the
-  active account has none. Refresh tokens are never shared, and the token
-  never appears in logs. See the README for the one-time `sudo` setup.
+  active account has none. It only ever replaces or removes the file it wrote
+  itself (checked by path, inode, size and mtime, never through a symlink);
+  anything else at the path is left alone and reported. Refresh tokens are
+  never shared, and the token never appears in logs. See the README for the one-time `sudo` setup.
 
 - One-line install that needs no Xcode:
   `curl -fsSL https://vibecom.build/bar/install.sh | bash`. It verifies the

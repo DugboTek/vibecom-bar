@@ -62,6 +62,9 @@ launch, vibecom bar writes that account's Compass token to
 user reads it into `CLAUDE_CODE_OAUTH_TOKEN`. If the active account has no
 Compass token, nothing is active, or the setting is off, the file is removed
 and the other user pauses rather than running on the wrong account.
+vibecom bar only ever replaces or removes the file it wrote itself. A file or
+symlink you put at that path is left alone and reported in Settings, and the
+path must end in `.token`.
 
 Only the long-lived setup-token is ever shared. The other user never receives
 a refresh token or Claude Code's own login, so neither side can sign the other

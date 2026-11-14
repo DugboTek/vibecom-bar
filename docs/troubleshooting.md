@@ -149,6 +149,10 @@ Open **Settings → Serve Another User** and read the status line:
 - **Paused: no saved Claude account is active.** Claude Code is signed in as an
   account vibecom bar doesn't have saved, or is signed out. Choose **Use** on a
   saved account.
+- **A file vibecom bar did not write is at …; not touching it.** Something
+  other than vibecom bar's own token file is at that path: a file you made, a
+  symlink, or a file left behind if vibecom bar was killed mid-write. Move or
+  delete it yourself, or choose another path ending in `.token`.
 - **The folder … doesn't exist / belongs to another user / Anyone can write
   to …** The one-time setup in the README hasn't been done, or the folder's
   owner or mode changed. vibecom bar never fixes this itself because it needs
