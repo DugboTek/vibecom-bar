@@ -55,6 +55,10 @@ private struct AccountRow: View {
     @State private var isHovering = false
     @State private var isRenaming = false
     @State private var draftName = ""
+    @State private var isEditingServeToken = false
+    @State private var draftServeToken = ""
+    @State private var serveTokenError: String?
+    @State private var isSavingServeToken = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
@@ -66,6 +70,9 @@ private struct AccountRow: View {
                 subtitle
                 if let error = status.error, error == .needsLogin || error == .cannotReadUsage {
                     signInPrompt(error)
+                }
+                if isEditingServeToken {
+                    serveTokenEditor
                 }
                 VStack(spacing: 2) {
                     ForEach(status.snapshot?.windows ?? []) { window in
@@ -107,6 +114,17 @@ private struct AccountRow: View {
             }
 
             Spacer(minLength: 4)
+
+            if model.hasServeToken(status) {
+                Pill(
+                    text: "Compass", systemImage: isServed ? "person.2.fill" : "person.2",
+                    tint: isServed ? Color(brand.accent) : .secondary
+                )
+                .help(
+                    isServed
+                        ? "Another user on this Mac is signed in with this account's Compass token."
+                        : "Has a Compass token. Another user on this Mac gets it while this account is active and Serve Another User is on.")
+            }
 
             if let resets = status.snapshot?.resetCredits, resets.available > 0 {
                 Pill(text: resets.summary, systemImage: "arrow.counterclockwise", tint: Color(brand.accent))
@@ -150,6 +168,66 @@ private struct AccountRow: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var isServed: Bool {
+        if case .serving = model.serveStatus { return status.isActive }
+        return false
+    }
+
+    /// Pasting a `claude setup-token` token, inline like renaming. A secure
+    /// field, so the token is never shown on screen.
+    private var serveTokenEditor: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Compass token")
+                .font(.system(size: 11, weight: .medium))
+            Text("Run `claude setup-token` signed in as this account and paste the token it prints. Only this token is ever given to the other user.")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                SecureField("sk-ant-oat…", text: $draftServeToken)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11, design: .monospaced))
+                    .onSubmit(saveServeToken)
+                    .onExitCommand(perform: closeServeTokenEditor)
+                Button("Save", action: saveServeToken)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(draftServeToken.isEmpty || isSavingServeToken)
+                Button("Cancel", action: closeServeTokenEditor)
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+            }
+            if let serveTokenError {
+                Label(serveTokenError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.top, 3)
+    }
+
+    private func saveServeToken() {
+        guard !isSavingServeToken else { return }
+        isSavingServeToken = true
+        let pasted = draftServeToken
+        Task {
+            let problem = await model.setServeToken(pasted, for: status)
+            isSavingServeToken = false
+            if let problem {
+                serveTokenError = problem
+            } else {
+                closeServeTokenEditor()
+            }
+        }
+    }
+
+    private func closeServeTokenEditor() {
+        isEditingServeToken = false
+        draftServeToken = ""
+        serveTokenError = nil
     }
 
     private var isSpent: Bool { status.snapshot?.windows.contains(where: \.isExhausted) ?? false }
@@ -197,6 +275,17 @@ private struct AccountRow: View {
         Button("Rename…") {
             draftName = status.account.label
             isRenaming = true
+        }
+        if status.account.provider == .claude {
+            Divider()
+            Button(model.hasServeToken(status) ? "Replace Compass Token…" : "Set Compass Token…") {
+                draftServeToken = ""
+                serveTokenError = nil
+                isEditingServeToken = true
+            }
+            if model.hasServeToken(status) {
+                Button("Remove Compass Token") { Task { await model.removeServeToken(for: status) } }
+            }
         }
         Divider()
         Button("Remove", role: .destructive) { Task { await model.remove(status) } }

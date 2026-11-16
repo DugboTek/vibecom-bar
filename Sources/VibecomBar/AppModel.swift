@@ -36,7 +36,7 @@ final class AppModel {
     /// Why auto swap is or is not switching each provider right now.
     private(set) var autoSwapExplanations: [String] = []
     /// Everything auto swap saw and did, for explaining a switch that did not happen.
-    let activityLog = ActivityLog()
+    let activityLog: ActivityLog
     /// Why the last switch, manual or automatic, did not happen. Shown on the
     /// accounts page, where the Use button lives.
     private(set) var switchFailure: String?
@@ -50,12 +50,26 @@ final class AppModel {
     /// Where CLAUDE_CODE_OAUTH_TOKEN is set; Claude sessions started with it
     /// ignore every switch.
     private(set) var claudeTokenOverrideSources: [String] = ClaudeTokenOverride.sources()
+    /// What the token file for another local user holds right now.
+    private(set) var serveStatus: ServeStatus = .off
+    /// What the Codex login file for another local user holds right now.
+    private(set) var codexServeStatus: ServeStatus = .off
+    /// Accounts with a saved Compass token (a `claude setup-token` token).
+    private(set) var serveTokenAccountIDs: Set<UUID> = []
     var page: Page = .accounts
 
     var preferences: Preferences {
         didSet {
             guard preferences != oldValue else { return }
+            // Sample data must never change the real settings or token file.
+            guard !isPreview else { return }
             try? preferencesStore.save(preferences)
+            if ServeSettings(preferences: preferences) != ServeSettings(preferences: oldValue) {
+                Task { await syncServedLogin() }
+            }
+            if ServeSettings(codexPreferences: preferences) != ServeSettings(codexPreferences: oldValue) {
+                Task { await syncServedCodexLogin() }
+            }
             updateAppNapExemption()
             if !preferences.autoSwapEnabled {
                 autoSwapAttempts.removeAll()
@@ -77,6 +91,9 @@ final class AppModel {
     private let vibecomStandingService: VibecomStandingService
     private let relayController = RelayController()
     private let relayInstaller: RelayInstaller
+    private let serveTokens: ServeTokenStore
+    private let localUserServer: LocalUserServer
+    private let codexUserServer: LocalUserServer
 
     private var timerTask: Task<Void, Never>?
     private var tokenTask: Task<Void, Never>?
@@ -98,6 +115,8 @@ final class AppModel {
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("VibecomBar", isDirectory: true)
         self.support = support
+        let activityLog = ActivityLog()
+        self.activityLog = activityLog
 
         let files = DiskFileStore()
         let environment = CLIEnvironment.live(files: files)
@@ -114,6 +133,16 @@ final class AppModel {
         vibecomProfile = vibecomData.flatMap(VibecomProfile.parse)
         vibecomStandingService = VibecomStandingService()
         vault = AccountVault(secrets: KeychainSecretStore(), files: files, directory: support)
+        serveTokens = ServeTokenStore(secrets: KeychainSecretStore())
+        localUserServer = LocalUserServer(
+            ownership: FileServeOwnershipStore(
+                files: files, url: support.appendingPathComponent("served-file.json")),
+            log: { activityLog.record($0) })
+        // Its own record file: each server only ever touches the file it wrote.
+        codexUserServer = LocalUserServer(
+            ownership: FileServeOwnershipStore(
+                files: files, url: support.appendingPathComponent("served-codex-file.json")),
+            log: { activityLog.record("Codex: " + $0) })
         activator = AccountActivator(vault: vault, environment: environment)
         monitor = AccountMonitor(vault: vault, activator: activator, environment: environment)
         importer = AccountImporter(environment: environment)
@@ -259,7 +288,8 @@ final class AppModel {
 
     /// Sample accounts for layout snapshots, so rendering the UI never touches
     /// the keychain (and never puts a password prompt on screen).
-    func loadPreviewAccounts() {
+    func loadPreviewAccounts(serving: Bool = false) {
+        isPreview = true
         let now = Date()
         func window(_ id: String, _ label: String, _ kind: UsageWindow.Kind, _ used: Double, _ hours: Double) -> UsageWindow {
             UsageWindow(id: id, label: label, kind: kind, usedFraction: used, resetsAt: now.addingTimeInterval(hours * 3600))
@@ -313,6 +343,15 @@ final class AppModel {
             allTime: VibecomStanding.Period(position: 4, tokens: 611_800_000),
             streakDays: 9)
         lastUpdated = now
+
+        if serving {
+            preferences.serveLocalUserEnabled = true
+            if let active = statuses.first(where: { $0.account.provider == .claude && $0.isActive }) {
+                serveTokenAccountIDs = [active.account.id]
+                serveStatus = .serving(
+                    account: active.account.label, path: preferences.serveLocalUserPath, group: "compassauth")
+            }
+        }
     }
 
     // MARK: - Reading usage
@@ -329,6 +368,9 @@ final class AppModel {
         let current = await monitor.refreshAll()
         let final = await autoSwapIfNeeded(current)
         statuses = final
+        hasReadAccounts = true
+        await syncServedLogin()
+        await syncServedCodexLogin()
         if let refreshedStanding = await refreshedStanding {
             vibecomStanding = refreshedStanding
         }
@@ -368,6 +410,11 @@ final class AppModel {
                 "Auto swap: \(decision.provider.displayName) \(decision.from.label) → \(decision.to.label)")
             do {
                 try await monitor.activate(decision.to)
+                if decision.provider == .claude {
+                    await syncServedLogin(active: decision.to)
+                } else {
+                    await syncServedCodexLogin(active: decision.to)
+                }
                 switched = true
                 switchFailure = nil
                 autoSwapActivityIsFailure = false
@@ -437,6 +484,12 @@ final class AppModel {
             activityLog.record(
                 "Use: \(status.account.provider.displayName) → \(status.account.label)")
             try await monitor.activate(status.account)
+            if status.account.provider == .claude {
+                // Follow the switch at once rather than after the next read.
+                await syncServedLogin(active: status.account)
+            } else {
+                await syncServedCodexLogin(active: status.account)
+            }
             let relays = queueRelayHandoff(from: source, to: status.account)
             if relays > 0 {
                 autoSwapActivity = "Moving \(relays) live \(status.account.provider.displayName) session\(relays == 1 ? "" : "s") after the current turn."
@@ -531,7 +584,121 @@ final class AppModel {
 
     func remove(_ status: AccountStatus) async {
         try? await vault.remove(status.account.id)
+        try? await serveTokens.remove(for: status.account.id)
+        serveTokenAccountIDs.remove(status.account.id)
         await refresh()
+    }
+
+    // MARK: - Serving another local user
+
+    /// The active saved Claude account as of the last read, or nil before the
+    /// first read finishes.
+    private var activeClaudeAccount: StoredAccount? {
+        statuses.first { $0.account.provider == .claude && $0.isActive }?.account
+    }
+
+    private var hasReadAccounts = false
+    private var hasListedServeTokens = false
+    /// Set for snapshot sample data, which never touches disk or the keychain.
+    private var isPreview = false
+
+    /// Writes the active account's Compass token to the shared file, or
+    /// removes it. Before the first read the active account is unknown, so
+    /// nothing is touched yet; launch syncs once that read completes.
+    private func syncServedLogin(active: StoredAccount? = nil) async {
+        guard !isPreview, hasReadAccounts || active != nil else { return }
+        // Listed once; setting and removing a token keep the set current after that.
+        if !hasListedServeTokens, let ids = try? await serveTokens.accountIDs() {
+            serveTokenAccountIDs = ids
+            hasListedServeTokens = true
+        }
+        serveStatus = await localUserServer.sync(
+            settings: ServeSettings(preferences: preferences),
+            active: active ?? activeClaudeAccount,
+            tokens: serveTokens)
+    }
+
+    /// When an early Codex renewal for the served copy was last tried, so a
+    /// failing one is retried every half hour rather than on every refresh.
+    private var codexEarlyRenewalAttempts: [UUID: Date] = [:]
+    private static let codexEarlyRenewalRetry: TimeInterval = 30 * 60
+
+    private var activeCodexAccount: StoredAccount? {
+        statuses.first { $0.account.provider == .codex && $0.isActive }?.account
+    }
+
+    /// Writes an access-only copy of the active Codex login for the other user,
+    /// or removes it. A login with under `CodexServe.renewBelow` left is renewed
+    /// here first, so the served copy keeps days of life; if that fails and less
+    /// than a day is left, the file is removed and the other user pauses.
+    private func syncServedCodexLogin(active: StoredAccount? = nil) async {
+        guard !isPreview, hasReadAccounts || active != nil else { return }
+        let settings = ServeSettings(codexPreferences: preferences)
+        let account = active ?? activeCodexAccount
+        var credentials: CodexCredentials?
+        if settings.isEnabled, let account, account.provider == .codex {
+            if case .codex(let saved) = try? await vault.secret(for: account.id) {
+                credentials = saved
+                let lastTry = codexEarlyRenewalAttempts[account.id]
+                if CodexServe.needsRenewal(saved, now: Date()),
+                    lastTry.map({ Date().timeIntervalSince($0) >= Self.codexEarlyRenewalRetry }) ?? true
+                {
+                    codexEarlyRenewalAttempts[account.id] = Date()
+                    do {
+                        try await monitor.renewCredentials(for: account)
+                        activityLog.record("Codex: renewed \(account.label) early so the served copy keeps its life.")
+                        if case .codex(let renewed) = try? await vault.secret(for: account.id) {
+                            credentials = renewed
+                        }
+                    } catch {
+                        activityLog.record("Codex: couldn't renew \(account.label) early (\(type(of: error))).")
+                    }
+                }
+            }
+        }
+        codexServeStatus = codexUserServer.sync(codex: settings, active: account, credentials: credentials)
+    }
+
+    func hasServeToken(_ status: AccountStatus) -> Bool {
+        serveTokenAccountIDs.contains(status.account.id)
+    }
+
+    /// Saves a pasted `claude setup-token` token for an account. Returns why it
+    /// was refused, or nil once saved. The token is never logged.
+    func setServeToken(_ raw: String, for status: AccountStatus) async -> String? {
+        guard status.account.provider == .claude else { return "Only Claude accounts can serve another user." }
+        var savedLogin: ClaudeCredentials?
+        if case .claude(let credentials) = try? await vault.secret(for: status.account.id) {
+            savedLogin = credentials
+        }
+        do {
+            let token = try ServeToken.validate(raw, savedLogin: savedLogin)
+            try await serveTokens.set(token, for: status.account.id)
+        } catch let error as ServeTokenError {
+            return error.message
+        } catch {
+            return "Couldn't save the token in the keychain: \(Self.describeSwitchFailure(error))"
+        }
+        serveTokenAccountIDs.insert(status.account.id)
+        activityLog.record("Compass token saved for \(status.account.label).")
+        await syncServedLogin()
+        return nil
+    }
+
+    func removeServeToken(for status: AccountStatus) async {
+        do {
+            try await serveTokens.remove(for: status.account.id)
+            serveTokenAccountIDs.remove(status.account.id)
+            activityLog.record("Compass token removed for \(status.account.label).")
+        } catch {
+            activityLog.record("Couldn't remove the Compass token for \(status.account.label): \(error)")
+        }
+        await syncServedLogin()
+    }
+
+    func revealServeFolder() {
+        let folder = URL(fileURLWithPath: preferences.serveLocalUserPath).deletingLastPathComponent()
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
     func rename(_ status: AccountStatus, to label: String) async {

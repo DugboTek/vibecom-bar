@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// `VibecomBar --snapshot <accounts|add|settings> <out.png> [--dark] [--tokens]`
+/// `VibecomBar --snapshot <accounts|add|settings> <out.png> [--dark] [--tokens] [--serve]`
 /// renders a page the way the menu bar window sizes it, then exits. It uses
 /// sample accounts, so it never reads the keychain or prompts for a password;
 /// `--tokens` also counts this Mac's real transcripts, which are plain files.
@@ -16,6 +16,7 @@ enum Snapshot {
         let output = URL(fileURLWithPath: arguments[index + 2])
         let dark = arguments.contains("--dark")
         let countTokens = arguments.contains("--tokens")
+        // `--serve` shows Serve Another User on, serving the sample active account.
         let wait = Double(ProcessInfo.processInfo.environment["VIBECOM_SNAPSHOT_WAIT"] ?? "0.5") ?? 0.5
 
         // Runs once the app is up, so async work (the token count) proceeds on
@@ -23,7 +24,7 @@ enum Snapshot {
         Task { @MainActor in
             let model = AppModel()
             model.page = page == "add" ? .addAccount : page == "settings" ? .settings : .accounts
-            model.loadPreviewAccounts()
+            model.loadPreviewAccounts(serving: arguments.contains("--serve"))
             if countTokens { model.startTokenFeed() }
 
             let host = NSHostingView(

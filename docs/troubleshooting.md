@@ -138,3 +138,26 @@ VIBECOM_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 ```
 
 Official releases use a stable Developer ID signature.
+
+## The other user (Serve Another User) is paused or not signed in
+
+Open **Settings → Serve Another User** and read the status line:
+
+- **Paused: … has no Compass token.** The active Claude account has no token
+  to share. Run `claude setup-token` signed in as that account, then choose
+  **Set Compass Token…** from the account's right-click menu.
+- **Paused: no saved Claude account is active.** Claude Code is signed in as an
+  account vibecom bar doesn't have saved, or is signed out. Choose **Use** on a
+  saved account.
+- **A file vibecom bar did not write is at …; not touching it.** Something
+  other than vibecom bar's own token file is at that path: a file you made, a
+  symlink, or a file left behind if vibecom bar was killed mid-write. Move or
+  delete it yourself, or choose another path ending in `.token`.
+- **The folder … doesn't exist / belongs to another user / Anyone can write
+  to …** The one-time setup in the README hasn't been done, or the folder's
+  owner or mode changed. vibecom bar never fixes this itself because it needs
+  `sudo`.
+
+The file is removed whenever there is nothing safe to serve, so the other
+user stops instead of running on the wrong account. **Show activity log**
+lists each change by account name.
