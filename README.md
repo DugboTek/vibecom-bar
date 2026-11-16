@@ -91,6 +91,22 @@ writable, the setting shows why and nothing is written. On the other user's side
 export CLAUDE_CODE_OAUTH_TOKEN="$(cat /Users/Shared/compass-auth/claude.token)" && claude
 ```
 
+**Codex too.** Turn on **Serve Codex too** under the same heading. vibecom bar
+then writes an access-only copy of the active Codex login to
+`/Users/Shared/compass-auth/codex-auth.json` (path must end in `.json`), with
+the same folder rules. The refresh token is replaced by a placeholder and the
+API key is left out, so only this Mac ever renews. It renews the active Codex
+account once under 72 hours are left, and removes the file when under 24 hours
+remain and renewing failed. On the other user's side, copy it into a private
+Codex home before each run:
+
+```bash
+export CODEX_HOME="$HOME/codex-home"; install -m 600 /Users/Shared/compass-auth/codex-auth.json "$CODEX_HOME/auth.json" && codex exec ...
+```
+
+Skip a run when the access token has under 12 hours left, and pin the Codex
+version (see [docs/security-model.md](docs/security-model.md)).
+
 ### Follow your work as it happens
 
 See today's tokens, your live token rate, and estimated API value across both

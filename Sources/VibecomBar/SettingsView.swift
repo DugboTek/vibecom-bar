@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var adoptionSessionID = ""
     @State private var showingAdoptionConfirmation = false
     @State private var draftServePath: String?
+    @State private var draftCodexServePath: String?
     @State private var showingServeSetup = false
 
     var body: some View {
@@ -181,6 +182,8 @@ struct SettingsView: View {
 
             group("Serve Another User") {
                 serveAnotherUser
+                Divider().padding(.leading, 12)
+                serveCodex
             }
 
             group("Privacy") {
@@ -269,8 +272,8 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 } icon: {
-                    Image(systemName: serveStatusIcon)
-                        .foregroundStyle(serveStatusTint)
+                    Image(systemName: Self.icon(for: model.serveStatus))
+                        .foregroundStyle(Self.tint(for: model.serveStatus))
                 }
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
@@ -295,17 +298,94 @@ struct SettingsView: View {
         }
     }
 
-    private var serveStatusIcon: String {
-        switch model.serveStatus {
+    @ViewBuilder
+    private var serveCodex: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Serve Codex too")
+                    .font(.system(size: 12))
+                Text("Gives that user an access-only copy of the active Codex login. vibecom bar keeps the refresh token and renews early, so neither side signs the other out.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Toggle("Serve Codex too", isOn: $model.preferences.serveCodexEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+
+        if model.preferences.serveCodexEnabled {
+            Divider().padding(.leading, 12)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Codex login file")
+                    .font(.system(size: 11, weight: .medium))
+                HStack(spacing: 6) {
+                    TextField(ServeSettings.codexDefaultPath, text: codexServePathBinding)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 10, design: .monospaced))
+                        .onSubmit(applyCodexServePath)
+                    Button("Apply", action: applyCodexServePath)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(draftCodexServePath == nil || draftCodexServePath == model.preferences.serveCodexPath)
+                }
+                if let draft = draftCodexServePath,
+                    let problem = ServeSettings.problem(with: draft, fileExtension: ServeSettings.codexExtension)
+                {
+                    Text(problem)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                }
+                Label {
+                    Text(model.codexServeStatus.message(showingAccount: !model.preferences.blurAccountNames))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                } icon: {
+                    Image(systemName: Self.icon(for: model.codexServeStatus))
+                        .foregroundStyle(Self.tint(for: model.codexServeStatus))
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .accessibilityElement(children: .combine)
+                Text("The other user copies this file into its own CODEX_HOME as auth.json before each run, and skips a run when the token has under 12 hours left.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var codexServePathBinding: Binding<String> {
+        Binding(
+            get: { draftCodexServePath ?? model.preferences.serveCodexPath },
+            set: { draftCodexServePath = $0 })
+    }
+
+    private func applyCodexServePath() {
+        guard let draft = draftCodexServePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+            ServeSettings.problem(with: draft, fileExtension: ServeSettings.codexExtension) == nil
+        else { return }
+        model.preferences.serveCodexPath = draft
+        draftCodexServePath = nil
+    }
+
+    private static func icon(for status: ServeStatus) -> String {
+        switch status {
         case .serving: "checkmark.circle.fill"
         case .failed, .foreignFile: "exclamationmark.triangle.fill"
-        case .pausedNoToken, .pausedNoActiveAccount: "pause.circle"
+        case .pausedNoToken, .pausedNoActiveAccount, .pausedNoActiveCodexAccount, .pausedCodexExpiring: "pause.circle"
         case .off: "circle"
         }
     }
 
-    private var serveStatusTint: AnyShapeStyle {
-        switch model.serveStatus {
+    private static func tint(for status: ServeStatus) -> AnyShapeStyle {
+        switch status {
         case .serving: AnyShapeStyle(.green)
         case .failed, .foreignFile: AnyShapeStyle(.orange)
         default: AnyShapeStyle(.secondary)

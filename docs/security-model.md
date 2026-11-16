@@ -144,6 +144,28 @@ with `O_DIRECTORY | O_NOFOLLOW`, checks that open folder again, and creates and
 renames the temp file relative to it (`openat`, `renameat`), so the folder
 checked is the folder written to.
 
+### Codex
+
+Codex has no long-lived token like `claude setup-token`, and its refresh
+tokens rotate, so **Serve Codex too** never hands over a refresh token. The
+served `auth.json` holds the active account's access token, ID token and
+account id, with the placeholder `vibecom-served-no-refresh` where the refresh
+token goes and no API key. vibecom bar stays the only side that renews: it
+renews the active Codex account once its access token has under 72 hours left
+(retrying a failed renewal every 30 minutes), and removes the file when under
+24 hours are left. Codex access tokens last 240 hours, so a stolen copy is
+usable for at most that long and can't mint more.
+
+Measured against Codex CLI 0.169.0: `codex exec` runs on such a file, never
+rewrites it and never sends the placeholder, even with `last_refresh` nine
+days old. The other user should pin its Codex version, copy the file into its
+own `CODEX_HOME` as `auth.json` before each run, and skip a run with under 12
+hours left. A later Codex that refreshes on `last_refresh` would send the
+placeholder, be refused, and pause the other user; nothing on this Mac changes.
+
+The file uses the same folder rules and own-file-only record as the Claude
+token, with its own record (`served-codex-file.json`).
+
 The activity log and Settings name the account and the path, never the token.
 Tests check every log line and on-screen status for token text. The file is
 left in place when vibecom bar quits, so the other user keeps working on the

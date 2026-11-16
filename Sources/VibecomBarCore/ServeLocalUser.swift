@@ -113,24 +113,44 @@ public actor ServeTokenStore {
 
 public struct ServeSettings: Equatable, Sendable {
     public static let defaultPath = "/Users/Shared/compass-auth/claude.token"
+    public static let codexDefaultPath = "/Users/Shared/compass-auth/codex-auth.json"
 
     public var isEnabled: Bool
     public var path: String
+    /// The ending the file name must have: `token` for Claude, `json` for Codex.
+    public var fileExtension: String
 
-    public init(isEnabled: Bool, path: String = ServeSettings.defaultPath) {
+    public init(isEnabled: Bool, path: String = ServeSettings.defaultPath, fileExtension: String = ServeSettings.requiredExtension) {
         self.isEnabled = isEnabled
         self.path = path
+        self.fileExtension = fileExtension
     }
 
     public init(preferences: Preferences) {
         self.init(isEnabled: preferences.serveLocalUserEnabled, path: preferences.serveLocalUserPath)
     }
 
+    /// The Codex side: its own switch, its own path, and a `.json` file.
+    public init(codexPreferences preferences: Preferences) {
+        self.init(
+            isEnabled: preferences.serveCodexEnabled, path: preferences.serveCodexPath,
+            fileExtension: ServeSettings.codexExtension)
+    }
+
     public static let requiredExtension = "token"
+    public static let codexExtension = "json"
+
+    /// Why this setting's path can't be used, or nil when it can.
+    public var problem: String? { Self.problem(with: path, fileExtension: fileExtension) }
 
     /// Why a path can't be used, or nil when it can. The `.token` ending keeps
     /// a mistyped path from naming a file someone cares about.
     public static func problem(with path: String) -> String? {
+        problem(with: path, fileExtension: requiredExtension)
+    }
+
+    /// The same rules with another required ending, `.json` for the Codex file.
+    public static func problem(with path: String, fileExtension: String) -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Enter the full path of the token file." }
         guard trimmed.hasPrefix("/") else { return "Use a full path that starts with /." }
@@ -138,8 +158,11 @@ public struct ServeSettings: Equatable, Sendable {
         let name = (trimmed as NSString).lastPathComponent
         guard name != ".", name != ".." else { return "The path must name a file, not a folder." }
         guard !trimmed.split(separator: "/").contains("..") else { return "The path can't contain “..”." }
-        guard (name as NSString).pathExtension == requiredExtension, name.count > requiredExtension.count + 1
-        else { return "The file name must end in .\(requiredExtension), for example claude.token." }
+        guard (name as NSString).pathExtension == fileExtension, name.count > fileExtension.count + 1
+        else {
+            let example = fileExtension == codexExtension ? "codex-auth.json" : "claude.token"
+            return "The file name must end in .\(fileExtension), for example \(example)."
+        }
         return nil
     }
 }
@@ -439,6 +462,10 @@ public enum ServeStatus: Equatable, Sendable {
     /// The file was removed, so the other user pauses until this changes.
     case pausedNoActiveAccount
     case pausedNoToken(account: String)
+    case pausedNoActiveCodexAccount
+    /// The active Codex login has under a day left and could not be renewed,
+    /// so the other user pauses rather than start work on a dying token.
+    case pausedCodexExpiring(account: String)
     /// Something vibecom bar didn't write is at the path. It is left alone.
     case foreignFile(path: String)
     case failed(String)
@@ -457,6 +484,9 @@ public enum ServeStatus: Equatable, Sendable {
         case .pausedNoToken(let account):
             let subject = showingAccount ? account : "The active account"
             return "Paused: \(subject) has no Compass token. Add one from its menu."
+        case .pausedNoActiveCodexAccount: return "Paused: no saved Codex account is active."
+        case .pausedCodexExpiring(let account):
+            return "Paused: \(name(account))'s Codex login has under a day left and couldn't be renewed."
         case .foreignFile(let path):
             return "A file vibecom bar did not write is at \(path); not touching it. Move it away or choose another path."
         case .failed(let message): return message
@@ -520,19 +550,65 @@ public final class LocalUserServer: @unchecked Sendable {
                 tokenReadFailed = true
             }
         }
-        return lock.withLock {
-            if ticket < appliedTicket, let lastStatus { return lastStatus }
-            appliedTicket = ticket
-            let status: ServeStatus
+        return finish(ticket) {
             if tokenReadFailed, let active {
                 // Not knowing the token is not the same as having none, but the
                 // safe side is still to stop serving the previous account's.
-                status = withdraw(
-                    settings.path,
+                return withdraw(
+                    settings,
                     otherwise: .failed("Couldn't read \(active.label)'s Compass token from the keychain."))
-            } else {
-                status = apply(settings: settings, active: active, token: token)
             }
+            let content: Content
+            if let active, active.provider == .claude {
+                content = token.map { .data(Data($0.utf8), account: active.label) } ?? .noToken(account: active.label)
+            } else {
+                content = .noActiveAccount
+            }
+            return apply(settings: settings, content: content)
+        }
+    }
+
+    /// Codex: writes an access-only `auth.json` for the active Codex account, or
+    /// removes the file. `credentials` are the account's saved login, already
+    /// renewed by the caller when it was close to expiry. The refresh token is
+    /// never written (see `CodexServe`).
+    @discardableResult
+    public func sync(
+        codex settings: ServeSettings, active: StoredAccount?, credentials: CodexCredentials?, now: Date = Date()
+    ) -> ServeStatus {
+        let ticket = lock.withLock {
+            issuedTickets += 1
+            return issuedTickets
+        }
+        return finish(ticket) {
+            guard settings.isEnabled, let active, active.provider == .codex else {
+                return apply(settings: settings, content: .noActiveAccount)
+            }
+            guard let credentials else {
+                return withdraw(
+                    settings, otherwise: .failed("Couldn't read \(active.label)'s saved Codex login."))
+            }
+            switch CodexServe.payload(for: credentials, now: now) {
+            case .success(let data): return apply(settings: settings, content: .data(data, account: active.label))
+            case .failure: return apply(settings: settings, content: .expiring(account: active.label))
+            }
+        }
+    }
+
+    /// What the file should hold, worked out before the lock is taken.
+    private enum Content {
+        case data(Data, account: String)
+        case noActiveAccount
+        case noToken(account: String)
+        case expiring(account: String)
+    }
+
+    /// Runs `body` only for the newest sync and logs a changed status.
+    private func finish(_ ticket: Int, _ body: () -> ServeStatus) -> ServeStatus {
+        lock.withLock {
+            if ticket < appliedTicket, let lastStatus { return lastStatus }
+            appliedTicket = ticket
+            let status = body()
             if status != lastStatus {
                 log("Serve another user: \(status.message)")
                 lastStatus = status
@@ -595,7 +671,7 @@ public final class LocalUserServer: @unchecked Sendable {
         }
     }
 
-    private func apply(settings: ServeSettings, active: StoredAccount?, token: String?) -> ServeStatus {
+    private func apply(settings: ServeSettings, content: Content) -> ServeStatus {
         // A file of ours left at a previous path would keep serving a stale
         // account. A file someone else put there is theirs and stays.
         if let previous = record?.path, previous != settings.path {
@@ -611,16 +687,23 @@ public final class LocalUserServer: @unchecked Sendable {
             }
             return .off
         }
-        if let problem = ServeSettings.problem(with: settings.path) { return .failed(problem) }
-        guard let active, active.provider == .claude else {
-            return withdraw(settings.path, otherwise: .pausedNoActiveAccount)
-        }
-        guard let token else {
-            return withdraw(settings.path, otherwise: .pausedNoToken(account: active.label))
+        if let problem = settings.problem { return .failed(problem) }
+        let isCodex = settings.fileExtension == ServeSettings.codexExtension
+        let account: String
+        let data: Data
+        switch content {
+        case .noActiveAccount:
+            return withdraw(settings, otherwise: isCodex ? .pausedNoActiveCodexAccount : .pausedNoActiveAccount)
+        case .noToken(let label):
+            return withdraw(settings, otherwise: .pausedNoToken(account: label))
+        case .expiring(let label):
+            return withdraw(settings, otherwise: .pausedCodexExpiring(account: label))
+        case .data(let bytes, let label):
+            account = label
+            data = bytes
         }
 
         let url = URL(fileURLWithPath: settings.path)
-        let data = Data(token.utf8)
         do {
             try files.checkFolder(url.deletingLastPathComponent())
             switch ownership(of: settings.path) {
@@ -635,7 +718,7 @@ public final class LocalUserServer: @unchecked Sendable {
             case .nothing:
                 try write(data, to: url)
             }
-            return .serving(account: active.label, path: settings.path, group: files.groupName(of: url))
+            return .serving(account: account, path: settings.path, group: files.groupName(of: url))
         } catch {
             // A write that failed must not leave the previous account's token
             // being served as if it were current, but only our own file goes.
@@ -652,12 +735,12 @@ public final class LocalUserServer: @unchecked Sendable {
         remember(ServedFileRecord(path: url.path, stamp: stamp))
     }
 
-    /// Stops serving at `path`: removes our file, or reports a foreign one.
-    private func withdraw(_ path: String, otherwise status: ServeStatus) -> ServeStatus {
-        guard ServeSettings.problem(with: path) == nil else { return status }
-        switch removeIfOurs(path) {
+    /// Stops serving at the setting's path: removes our file, or reports a foreign one.
+    private func withdraw(_ settings: ServeSettings, otherwise status: ServeStatus) -> ServeStatus {
+        guard settings.problem == nil else { return status }
+        switch removeIfOurs(settings.path) {
         case .removed: return status
-        case .leftForeign: return .foreignFile(path: path)
+        case .leftForeign: return .foreignFile(path: settings.path)
         case .failed(let reason):
             return .failed("Couldn't remove the token file, so the other user may still be served: \(reason)")
         }

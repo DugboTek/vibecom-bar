@@ -18,7 +18,15 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
   anything else at the path is left alone and reported. Refresh tokens are
   never shared, and the token never appears in logs. A symlinked or
   group-writable folder is refused, and the write works relative to the one
-  folder it opened and checked. See the README for the one-time `sudo` setup.
+  folder it opened and checked.
+- **Serve Codex too** (off by default, under Serve Another User) gives that
+  user an access-only copy of the active Codex login at
+  `/Users/Shared/compass-auth/codex-auth.json` (mode 640, same folder rules
+  and own-file-only replace and remove). The refresh token is replaced by a
+  placeholder and the API key is left out, so the other user can never rotate
+  this Mac's login. vibecom bar renews the active Codex account once it has
+  under 72 hours left, and removes the file when under 24 hours are left and
+  renewing failed. See the README for the one-time `sudo` setup.
 
 - One-line install that needs no Xcode:
   `curl -fsSL https://vibecom.build/bar/install.sh | bash`. It verifies the

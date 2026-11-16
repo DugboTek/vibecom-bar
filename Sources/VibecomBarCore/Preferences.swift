@@ -17,6 +17,10 @@ public struct Preferences: Codable, Equatable, Sendable {
     /// user on this Mac reads. Off until the user turns it on.
     public var serveLocalUserEnabled: Bool = false
     public var serveLocalUserPath: String = ServeSettings.defaultPath
+    /// Write an access-only copy of the active Codex login for that user. Off
+    /// until turned on; separate from the Claude switch.
+    public var serveCodexEnabled: Bool = false
+    public var serveCodexPath: String = ServeSettings.codexDefaultPath
 
     public init() {}
 
@@ -34,6 +38,9 @@ public struct Preferences: Codable, Equatable, Sendable {
         serveLocalUserEnabled = try values.decodeIfPresent(Bool.self, forKey: .serveLocalUserEnabled) ?? false
         serveLocalUserPath =
             try values.decodeIfPresent(String.self, forKey: .serveLocalUserPath) ?? ServeSettings.defaultPath
+        serveCodexEnabled = try values.decodeIfPresent(Bool.self, forKey: .serveCodexEnabled) ?? false
+        serveCodexPath =
+            try values.decodeIfPresent(String.self, forKey: .serveCodexPath) ?? ServeSettings.codexDefaultPath
         refreshInterval = storedRefreshInterval
     }
 
@@ -50,7 +57,8 @@ public struct Preferences: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case storedRefreshInterval = "refreshInterval"
         case menuBarStyle, alertThresholds, notifyOnReset, showInactiveAccounts, launchAtLogin,
-            blurAccountNames, autoSwapEnabled, liveRelayEnabled, serveLocalUserEnabled, serveLocalUserPath
+            blurAccountNames, autoSwapEnabled, liveRelayEnabled, serveLocalUserEnabled, serveLocalUserPath,
+            serveCodexEnabled, serveCodexPath
     }
 }
 

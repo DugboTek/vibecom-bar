@@ -52,6 +52,8 @@ final class AppModel {
     private(set) var claudeTokenOverrideSources: [String] = ClaudeTokenOverride.sources()
     /// What the token file for another local user holds right now.
     private(set) var serveStatus: ServeStatus = .off
+    /// What the Codex login file for another local user holds right now.
+    private(set) var codexServeStatus: ServeStatus = .off
     /// Accounts with a saved Compass token (a `claude setup-token` token).
     private(set) var serveTokenAccountIDs: Set<UUID> = []
     var page: Page = .accounts
@@ -64,6 +66,9 @@ final class AppModel {
             try? preferencesStore.save(preferences)
             if ServeSettings(preferences: preferences) != ServeSettings(preferences: oldValue) {
                 Task { await syncServedLogin() }
+            }
+            if ServeSettings(codexPreferences: preferences) != ServeSettings(codexPreferences: oldValue) {
+                Task { await syncServedCodexLogin() }
             }
             updateAppNapExemption()
             if !preferences.autoSwapEnabled {
@@ -88,6 +93,7 @@ final class AppModel {
     private let relayInstaller: RelayInstaller
     private let serveTokens: ServeTokenStore
     private let localUserServer: LocalUserServer
+    private let codexUserServer: LocalUserServer
 
     private var timerTask: Task<Void, Never>?
     private var tokenTask: Task<Void, Never>?
@@ -132,6 +138,11 @@ final class AppModel {
             ownership: FileServeOwnershipStore(
                 files: files, url: support.appendingPathComponent("served-file.json")),
             log: { activityLog.record($0) })
+        // Its own record file: each server only ever touches the file it wrote.
+        codexUserServer = LocalUserServer(
+            ownership: FileServeOwnershipStore(
+                files: files, url: support.appendingPathComponent("served-codex-file.json")),
+            log: { activityLog.record("Codex: " + $0) })
         activator = AccountActivator(vault: vault, environment: environment)
         monitor = AccountMonitor(vault: vault, activator: activator, environment: environment)
         importer = AccountImporter(environment: environment)
@@ -359,6 +370,7 @@ final class AppModel {
         statuses = final
         hasReadAccounts = true
         await syncServedLogin()
+        await syncServedCodexLogin()
         if let refreshedStanding = await refreshedStanding {
             vibecomStanding = refreshedStanding
         }
@@ -400,6 +412,8 @@ final class AppModel {
                 try await monitor.activate(decision.to)
                 if decision.provider == .claude {
                     await syncServedLogin(active: decision.to)
+                } else {
+                    await syncServedCodexLogin(active: decision.to)
                 }
                 switched = true
                 switchFailure = nil
@@ -473,6 +487,8 @@ final class AppModel {
             if status.account.provider == .claude {
                 // Follow the switch at once rather than after the next read.
                 await syncServedLogin(active: status.account)
+            } else {
+                await syncServedCodexLogin(active: status.account)
             }
             let relays = queueRelayHandoff(from: source, to: status.account)
             if relays > 0 {
@@ -600,6 +616,47 @@ final class AppModel {
             settings: ServeSettings(preferences: preferences),
             active: active ?? activeClaudeAccount,
             tokens: serveTokens)
+    }
+
+    /// When an early Codex renewal for the served copy was last tried, so a
+    /// failing one is retried every half hour rather than on every refresh.
+    private var codexEarlyRenewalAttempts: [UUID: Date] = [:]
+    private static let codexEarlyRenewalRetry: TimeInterval = 30 * 60
+
+    private var activeCodexAccount: StoredAccount? {
+        statuses.first { $0.account.provider == .codex && $0.isActive }?.account
+    }
+
+    /// Writes an access-only copy of the active Codex login for the other user,
+    /// or removes it. A login with under `CodexServe.renewBelow` left is renewed
+    /// here first, so the served copy keeps days of life; if that fails and less
+    /// than a day is left, the file is removed and the other user pauses.
+    private func syncServedCodexLogin(active: StoredAccount? = nil) async {
+        guard !isPreview, hasReadAccounts || active != nil else { return }
+        let settings = ServeSettings(codexPreferences: preferences)
+        let account = active ?? activeCodexAccount
+        var credentials: CodexCredentials?
+        if settings.isEnabled, let account, account.provider == .codex {
+            if case .codex(let saved) = try? await vault.secret(for: account.id) {
+                credentials = saved
+                let lastTry = codexEarlyRenewalAttempts[account.id]
+                if CodexServe.needsRenewal(saved, now: Date()),
+                    lastTry.map({ Date().timeIntervalSince($0) >= Self.codexEarlyRenewalRetry }) ?? true
+                {
+                    codexEarlyRenewalAttempts[account.id] = Date()
+                    do {
+                        try await monitor.renewCredentials(for: account)
+                        activityLog.record("Codex: renewed \(account.label) early so the served copy keeps its life.")
+                        if case .codex(let renewed) = try? await vault.secret(for: account.id) {
+                            credentials = renewed
+                        }
+                    } catch {
+                        activityLog.record("Codex: couldn't renew \(account.label) early (\(type(of: error))).")
+                    }
+                }
+            }
+        }
+        codexServeStatus = codexUserServer.sync(codex: settings, active: account, credentials: credentials)
     }
 
     func hasServeToken(_ status: AccountStatus) -> Bool {
