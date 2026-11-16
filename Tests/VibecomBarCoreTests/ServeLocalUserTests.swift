@@ -360,6 +360,49 @@ struct ServeLocalUserTests {
         #expect(!box.exists)
     }
 
+    @Test("a group-writable folder is refused, since the other user is in the group")
+    func groupWritableFolderIsRefused() async throws {
+        let box = try Sandbox()
+        defer { box.cleanUp() }
+        chmod(box.folder.path, 0o770)
+        let alpha = account("alpha@example.com")
+        let store = try await tokens([alpha.id: tokenA])
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
+
+        let status = await server.sync(settings: box.settings(), active: alpha, tokens: store)
+
+        #expect(status == .failed(ServeFileError.folderGroupWritable(box.folder.path).message))
+        #expect(!box.exists)
+        // The writer refuses on its own too, on the folder it opened.
+        #expect(throws: ServeFileError.folderGroupWritable(box.folder.path)) {
+            try AtomicFileWriter().write(Data(tokenA.utf8), to: box.target, mode: 0o640)
+        }
+        #expect(!box.exists)
+    }
+
+    @Test("a symlink in place of the folder is refused and nothing is written through it")
+    func symlinkedFolderIsRefused() async throws {
+        let box = try Sandbox()
+        defer { box.cleanUp() }
+        // A real folder this user owns, mode 750: every other check would pass.
+        let real = box.folder.appendingPathComponent("real", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o750])
+        let link = box.folder.appendingPathComponent("compass-auth")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let target = link.appendingPathComponent("claude.token")
+        let alpha = account("alpha@example.com")
+        let store = try await tokens([alpha.id: tokenA])
+        let server = LocalUserServer(ownership: box.ownership, log: { _ in })
+
+        let status = await server.sync(settings: ServeSettings(isEnabled: true, path: target.path), active: alpha, tokens: store)
+
+        #expect(status == .failed(ServeFileError.folderIsSymlink(link.path).message))
+        #expect(throws: ServeFileError.folderIsSymlink(link.path)) {
+            try AtomicFileWriter().write(Data(tokenA.utf8), to: target, mode: 0o640)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: real.path).isEmpty)
+    }
+
     @Test("a relative or folder path is refused before anything is touched")
     func badPathsAreRefused() {
         #expect(ServeSettings.problem(with: "") != nil)

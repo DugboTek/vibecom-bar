@@ -153,6 +153,11 @@ public enum ServeFileError: Error, Equatable, Sendable {
     case folderNotOwned(String)
     /// Anyone can create files in the folder, so the file could be replaced.
     case folderWorldWritable(String)
+    /// Members of the folder's group could replace the file, and the other
+    /// user is one of them.
+    case folderGroupWritable(String)
+    /// The folder is a symlink, so whoever made the link chose where the token goes.
+    case folderIsSymlink(String)
     case folderNotWritable(String)
     case invalidPath(String)
     /// errno from the failed step. The path is included; the contents never are.
@@ -167,6 +172,10 @@ public enum ServeFileError: Error, Equatable, Sendable {
             "\(path) belongs to another user. It must be owned by \(NSUserName()) so only vibecom bar can change the token."
         case .folderWorldWritable(let path):
             "Anyone can write to \(path). Set it to 750 so the token file can't be swapped out."
+        case .folderGroupWritable(let path):
+            "Its group can write to \(path), so the other user could swap the token file. Set it to 750."
+        case .folderIsSymlink(let path):
+            "\(path) is a symlink. Replace it with a real folder (see Setup); vibecom bar never writes through a link."
         case .folderNotWritable(let path): "vibecom bar can't write to \(path). Check its owner and permissions."
         case .invalidPath(let problem): problem
         case .io(let step, let path, let code):
@@ -234,15 +243,37 @@ public struct AtomicFileWriter: Sendable {
 
     public func write(_ data: Data, to url: URL, mode: mode_t) throws {
         let folder = url.deletingLastPathComponent()
-        let temp = folder.appendingPathComponent(".\(url.lastPathComponent).vibecom-\(UUID().uuidString).tmp")
-        let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)
+        let name = url.lastPathComponent
+        let tempName = ".\(name).vibecom-\(UUID().uuidString).tmp"
+        let temp = folder.appendingPathComponent(tempName)
+
+        // Every step below works relative to this one open folder, so the folder
+        // checked is the folder written to, even if the path is swapped meanwhile.
+        let dirfd = open(folder.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard dirfd >= 0 else {
+            let code = errno
+            // With O_DIRECTORY, macOS reports a symlink as ENOTDIR rather than ELOOP.
+            var link = stat()
+            if code == ELOOP || (lstat(folder.path, &link) == 0 && link.st_mode & S_IFMT == S_IFLNK) {
+                throw ServeFileError.folderIsSymlink(folder.path)
+            }
+            if code == ENOENT { throw ServeFileError.folderMissing(folder.path) }
+            if code == ENOTDIR { throw ServeFileError.notAFolder(folder.path) }
+            throw ServeFileError.io(step: "open", path: folder.path, code: code)
+        }
+        defer { close(dirfd) }
+        var folderInfo = stat()
+        guard fstat(dirfd, &folderInfo) == 0 else { throw ServeFileError.io(step: "check", path: folder.path, code: errno) }
+        try DiskServeFileSystem.requireSafe(folderInfo, path: folder.path)
+
+        let fd = openat(dirfd, tempName, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)
         guard fd >= 0 else { throw ServeFileError.io(step: "create a file in", path: folder.path, code: errno) }
 
         var renamed = false
         var closed = false
         defer {
             if !closed { close(fd) }
-            if !renamed { unlink(temp.path) }
+            if !renamed { unlinkat(dirfd, tempName, 0) }
         }
 
         // The umask may have taken bits away; set exactly what was asked for.
@@ -267,17 +298,13 @@ public struct AtomicFileWriter: Sendable {
 
         closed = true
         guard close(fd) == 0 else { throw ServeFileError.io(step: "close", path: temp.path, code: errno) }
-        guard rename(temp.path, url.path) == 0 else {
+        guard renameat(dirfd, tempName, dirfd, name) == 0 else {
             throw ServeFileError.io(step: "replace", path: url.path, code: errno)
         }
         renamed = true
 
         // Make the rename itself durable.
-        let dirfd = open(folder.path, O_RDONLY | O_CLOEXEC)
-        if dirfd >= 0 {
-            fsync(dirfd)
-            close(dirfd)
-        }
+        fsync(dirfd)
     }
 }
 
@@ -289,14 +316,24 @@ public struct DiskServeFileSystem: ServeFileSystem {
 
     public func checkFolder(_ folder: URL) throws {
         var info = stat()
-        guard stat(folder.path, &info) == 0 else {
+        // lstat: a symlink at the folder's path is refused, never followed.
+        guard lstat(folder.path, &info) == 0 else {
             if errno == ENOENT || errno == ENOTDIR { throw ServeFileError.folderMissing(folder.path) }
             throw ServeFileError.io(step: "check", path: folder.path, code: errno)
         }
-        guard info.st_mode & S_IFMT == S_IFDIR else { throw ServeFileError.notAFolder(folder.path) }
-        guard info.st_uid == getuid() else { throw ServeFileError.folderNotOwned(folder.path) }
-        guard info.st_mode & S_IWOTH == 0 else { throw ServeFileError.folderWorldWritable(folder.path) }
+        try Self.requireSafe(info, path: folder.path)
         guard access(folder.path, W_OK | X_OK) == 0 else { throw ServeFileError.folderNotWritable(folder.path) }
+    }
+
+    /// The folder rules, shared by the up-front check (lstat) and the writer (fstat
+    /// on the folder it actually opened): a real folder, ours, writable by nobody else.
+    static func requireSafe(_ info: stat, path: String) throws {
+        let kind = info.st_mode & S_IFMT
+        guard kind != S_IFLNK else { throw ServeFileError.folderIsSymlink(path) }
+        guard kind == S_IFDIR else { throw ServeFileError.notAFolder(path) }
+        guard info.st_uid == getuid() else { throw ServeFileError.folderNotOwned(path) }
+        guard info.st_mode & S_IWOTH == 0 else { throw ServeFileError.folderWorldWritable(path) }
+        guard info.st_mode & S_IWGRP == 0 else { throw ServeFileError.folderGroupWritable(path) }
     }
 
     public func entry(at url: URL) -> ServeFileEntry {

@@ -16,7 +16,9 @@ All notable changes follow [Semantic Versioning](https://semver.org/).
   active account has none. It only ever replaces or removes the file it wrote
   itself (checked by path, inode, size and mtime, never through a symlink);
   anything else at the path is left alone and reported. Refresh tokens are
-  never shared, and the token never appears in logs. See the README for the one-time `sudo` setup.
+  never shared, and the token never appears in logs. A symlinked or
+  group-writable folder is refused, and the write works relative to the one
+  folder it opened and checked. See the README for the one-time `sudo` setup.
 
 - One-line install that needs no Xcode:
   `curl -fsSL https://vibecom.build/bar/install.sh | bash`. It verifies the

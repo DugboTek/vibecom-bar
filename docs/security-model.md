@@ -136,9 +136,13 @@ vibecom bar does not create users, groups, folders, or ACLs. The expected
 layout, created once with `sudo`, is a folder owned by the menu bar user with
 group `compassauth` (the menu bar user and `compass`), mode 750. A file created
 in it takes the folder's group, so with mode 640 only the owner and that group
-can read it. Before writing, vibecom bar refuses a folder that is missing, not
-owned by the menu bar user, writable by everyone, or not writable, and shows
-why in Settings.
+can read it. Before writing, vibecom bar refuses a folder that is missing, a
+symlink, not owned by the menu bar user, writable by its group or by everyone
+(the other user is in the group, so 770 would let it swap the file), or not
+writable, and shows why in Settings. The write itself opens the folder once
+with `O_DIRECTORY | O_NOFOLLOW`, checks that open folder again, and creates and
+renames the temp file relative to it (`openat`, `renameat`), so the folder
+checked is the folder written to.
 
 The activity log and Settings name the account and the path, never the token.
 Tests check every log line and on-screen status for token text. The file is

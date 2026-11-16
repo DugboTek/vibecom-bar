@@ -83,9 +83,9 @@ sudo chmod 750 /Users/Shared/compass-auth
 
 The token file is written as mode 640 and takes the folder's group, so only
 you and members of `compassauth` can read it. vibecom bar never creates users,
-groups, or permissions itself. If the folder is missing, owned by someone else,
-writable by everyone, or not writable, the setting shows why and nothing is
-written. On the other user's side, read the file fresh for each session:
+groups, or permissions itself. If the folder is missing, a symlink, owned by
+someone else, writable by its group or by everyone (it must be 750), or not
+writable, the setting shows why and nothing is written. On the other user's side, read the file fresh for each session:
 
 ```bash
 export CLAUDE_CODE_OAUTH_TOKEN="$(cat /Users/Shared/compass-auth/claude.token)" && claude
